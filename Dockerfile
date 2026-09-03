@@ -1,49 +1,49 @@
-#############################
-# Stage 1 - Build React App
-#############################
-FROM node:22-alpine AS frontend-builder
+# Multi-stage build for optimized final image
+FROM node:20-alpine AS frontend-builder
 
-WORKDIR /frontend
+WORKDIR /app/frontend
 
-# Install dependencies
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm install --legacy-peer-deps
 
-# Copy source
-COPY frontend/ .
-
-# Build production files
+COPY frontend/ ./
 RUN npm run build
 
-
-#############################
-# Stage 2 - Python Backend
-#############################
-FROM python:3.12-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Python backend image
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# System packages
-RUN apt-get update && \
-    apt-get install -y gcc && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend
-COPY backend/ .
+COPY backend/app ./app
 
-# Copy React build
-COPY --from=frontend-builder /frontend/dist ./frontend_dist
+# Copy built frontend dist from builder stage
+COPY --from=frontend-builder /app/frontend/dist ./frontend_dist
 
-# Railway provides PORT automatically
-ENV PORT=8000
+# Shared entrypoint (also used for bare-metal dev - see README.md)
+COPY startup.sh ./startup.sh
+RUN chmod +x ./startup.sh
 
-EXPOSE 8000
+# Create data directory for the database (kept outside the app code dir so
+# it survives image rebuilds when mounted as a volume, e.g. Railway's
+# volume mount path of /data)
+RUN mkdir -p /data
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+# Default DB location if not overridden by the deployment platform
+ENV HRMS_DATABASE_URL=sqlite:////data/hrms.db
+
+# Tells startup.sh it's running inside this image (deps/frontend already
+# built) rather than bare metal - more reliable than checking /.dockerenv,
+# which some container platforms (e.g. Railway) don't create.
+ENV HRMS_RUNNING_IN_DOCKER=1
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+CMD ["./startup.sh"]

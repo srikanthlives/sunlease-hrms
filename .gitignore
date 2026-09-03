@@ -1,16 +1,54 @@
-# backend
-backend/.venv/
-backend/__pycache__/
-backend/app/__pycache__/
-backend/app/routers/__pycache__/
-backend/app/utils/__pycache__/
-backend/*.db
-backend/.pytest_cache/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
 
-# frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
 
-.DS_Store
+# pytest
+.pytest_cache/
+.coverage
+
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Frontend build output
+frontend/dist/
+frontend/build/
+
+# Database
+*.db
+
+# Uploads and data directory
+/data/uploads/
+/data/*.db
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out

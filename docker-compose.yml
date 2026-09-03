@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8020:8000"
+    environment:
+      HRMS_SECRET_KEY: "${HRMS_SECRET_KEY:?set HRMS_SECRET_KEY in .env - generate with: openssl rand -hex 32}"
+      HRMS_DATABASE_URL: sqlite:////data/hrms.db
+      HRMS_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
+      HRMS_UPLOAD_DIR: /data/hrms-attachments
+
+    volumes:
+      - ./data:/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+
+  # Optional: PostgreSQL for production
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: hrms
+  #     POSTGRES_USER: hrms
+  #     POSTGRES_PASSWORD: change-this-password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+
+# volumes:
+#   postgres_data:

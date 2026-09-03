@@ -1,50 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: 45 30% 96%;       /* warm paper cream */
-  --foreground: 213 30% 14%;      /* deep ink navy */
-  --card: 40 33% 99%;
-  --card-foreground: 213 30% 14%;
-  --primary: 209 55% 22%;         /* deep ledger navy */
-  --primary-foreground: 45 30% 97%;
-  --secondary: 43 40% 90%;
-  --secondary-foreground: 213 30% 14%;
-  --muted: 40 20% 91%;
-  --muted-foreground: 213 12% 42%;
-  --destructive: 358 66% 46%;
-  --destructive-foreground: 45 30% 97%;
-  --border: 40 18% 84%;
-  --accent-gold: 43 62% 40%;      /* stamp / signature accent */
-  --radius: 0.5rem;
+@layer base {
+  body {
+    @apply bg-[#F5F6F8] text-ink font-sans;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid #2E8B77;
+    outline-offset: 2px;
+  }
 }
 
-* { border-color: hsl(var(--border)); }
-
-body {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  background-image:
-    radial-gradient(circle at 1px 1px, hsl(var(--border)) 1px, transparent 0);
-  background-size: 28px 28px;
-}
-
-.font-display { font-family: 'Lora', serif; }
-.font-mono-num {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 8px; }
-
-.stamp {
-  border: 2px solid hsl(var(--accent-gold));
-  color: hsl(var(--accent-gold));
-  transform: rotate(-3deg);
-  border-radius: 9999px;
-  font-family: 'Lora', serif;
-  letter-spacing: 0.08em;
+@layer utilities {
+  .hrms-card {
+    @apply bg-white border border-ink/10 rounded-md shadow-card;
+  }
 }

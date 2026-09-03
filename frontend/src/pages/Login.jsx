@@ -1,59 +1,51 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../auth/AuthContext'
-import { Button } from '../components/ui/button'
-import { Input } from '../components/ui/input'
-import { Label } from '../components/ui/label'
-import { Alert } from '../components/ui/alert'
-import logo from '../logo/sunlease.png'
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+import { Button, Input } from "../components/ui";
+import { apiErrorMessage } from "../api/client";
 
 export default function Login() {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const { login } = useAuth()
-  const navigate = useNavigate()
+  const { login } = useAuth();
+  const navigate = useNavigate();
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   async function handleSubmit(e) {
-    e.preventDefault()
-    setError('')
-    setLoading(true)
+    e.preventDefault();
+    setBusy(true);
+    setError("");
     try {
-      await login(username, password)
-      navigate('/')
+      await login(username, password);
+      navigate("/employees");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Login failed. Check your credentials.')
+      setError(apiErrorMessage(err));
     } finally {
-      setLoading(false)
+      setBusy(false);
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="min-h-screen flex items-center justify-center bg-ink px-4">
       <div className="w-full max-w-sm">
-        <div className="mb-8 flex flex-col items-center gap-2">
-          <img src={logo} alt="Sunlease" className="h-14 w-auto object-contain" />
-          <p className="text-sm text-muted-foreground">Payroll & Salary Management</p>
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-11 h-11 rounded-md bg-accent-500 text-white font-display font-semibold text-lg mb-4">
+            H
+          </div>
+          <h1 className="text-2xl font-display font-semibold text-white">HRMS</h1>
+          <p className="text-white/50 text-sm mt-1">Employee Data Management</p>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-border bg-card p-6 shadow-sm">
-          {error && <Alert variant="destructive">{error}</Alert>}
-          <div className="space-y-1.5">
-            <Label htmlFor="username">Username</Label>
-            <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="password">Password</Label>
-            <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
-          </div>
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign in'}
+        <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-card p-6 space-y-4">
+          <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required />
+          <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}
+          <Button type="submit" className="w-full" disabled={busy}>
+            {busy ? "Signing in…" : "Sign in"}
           </Button>
-          <p className="pt-2 text-center text-[11px] text-muted-foreground">
-            Demo: admin/admin123 · payroll/payroll123 · asha.rao/employee123
-          </p>
+          <p className="text-xs text-ink/40 text-center">Seeded login: admin / Admin@123</p>
         </form>
       </div>
     </div>
-  )
+  );
 }
