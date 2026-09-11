@@ -11,7 +11,7 @@ from app.models.models import (
     LeaveType, LeaveEligibilityRule, LeaveBalance, LeaveApplication,
     RosterEntry, EmploymentEpisode, User,
 )
-from app.services import audit_service, approval_service
+from app.services import audit_service, approval_service, document_service
 
 
 def _slug(value: str) -> str:
@@ -26,7 +26,7 @@ def save_attachment(db: Session, application: LeaveApplication, upload_file: Upl
     leave attachments aren't a DocumentType/DocumentMeta (they're
     per-application, not per-episode-per-type)."""
     ext = os.path.splitext(upload_file.filename or "")[1]
-    target_dir = os.path.join(settings.UPLOAD_DIR, "leave-attachments", str(application.episode_id))
+    target_dir = os.path.join(document_service._employee_upload_dir(db, application.episode), "leave-attachments")
     os.makedirs(target_dir, exist_ok=True)
     stored_name = f"{application.id}-{_slug(os.path.splitext(upload_file.filename or '')[0])}{ext}"
     full_path = os.path.join(target_dir, stored_name)
