@@ -30,6 +30,9 @@ const STATUS_STYLES = {
   SUSPENDED: "bg-danger/10 text-danger border-danger/30",
   NOTICE_PERIOD: "bg-accent-500/10 text-accent-600 border-accent-500/30",
   SEPARATED: "bg-ink/10 text-ink/60 border-ink/20",
+  EARNING: "bg-ok/10 text-ok border-ok/30",
+  DEDUCTION: "bg-danger/10 text-danger border-danger/30",
+  ADDITION: "bg-accent-500/10 text-accent-600 border-accent-500/30",
 };
 
 export function StatusBadge({ status }) {
@@ -132,7 +135,7 @@ export function formatDateTime(value) {
   return `${formatDate(d)}, ${hours}:${minutes}`;
 }
 
-export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No records found." }) {
+export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No records found.", singleLine = false }) {
   const [sort, setSort] = useState(null); // { key, dir: "asc" | "desc" }
 
   const sortedRows = useMemo(() => {
@@ -180,7 +183,10 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
         <thead className="border-b border-ink/10">
           <tr className="text-left text-xs uppercase tracking-wide text-ink/40">
             {columns.map((c) => (
-              <th key={c.key} className={`py-2 px-3 font-medium whitespace-nowrap ${c.align === "right" ? "text-right" : ""}`}>
+              <th
+                key={c.key}
+                className={`py-2 px-3 font-medium whitespace-nowrap ${c.align === "right" ? "text-right" : ""}`}
+              >
                 {c.sortable ? (
                   <button
                     type="button"
@@ -202,15 +208,32 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
               className={`border-b border-ink/5 last:border-0 ${onRowClick ? "cursor-pointer hover:bg-brand-50" : ""}`}
               onClick={() => onRowClick && onRowClick(row)}
             >
-              {columns.map((c) => (
-                <td
-                  key={c.key}
-                  className={`py-2.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""} ${hasWidths ? "truncate" : ""}`}
-                  title={hasWidths && typeof row[c.key] === "string" ? row[c.key] : undefined}
-                >
-                  {c.render ? c.render(row) : row[c.key]}
-                </td>
-              ))}
+              {columns.map((c) => {
+                const cellContent = c.render ? c.render(row) : row[c.key];
+                const tooltipText = c.tooltip ? c.tooltip(row) : (typeof row[c.key] === "string" ? row[c.key] : undefined);
+                if (singleLine && !c.noTruncate) {
+                  return (
+                    <td key={c.key} className={`py-2.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""}`}>
+                      <span
+                        className="block overflow-hidden text-ellipsis whitespace-nowrap"
+                        style={{ maxWidth: c.maxWidth || 200 }}
+                        title={tooltipText}
+                      >
+                        {cellContent}
+                      </span>
+                    </td>
+                  );
+                }
+                return (
+                  <td
+                    key={c.key}
+                    className={`py-2.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""} ${hasWidths ? "truncate" : ""}`}
+                    title={hasWidths && typeof row[c.key] === "string" ? row[c.key] : undefined}
+                  >
+                    {cellContent}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>

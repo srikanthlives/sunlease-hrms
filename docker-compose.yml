@@ -9,6 +9,17 @@ services:
       HRMS_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
       HRMS_UPLOAD_DIR: /data/hrms-attachments
 
+      # Outbound email - see .env / .env.example for what each does.
+      HRMS_SMTP_HOST: "${HRMS_SMTP_HOST:-}"
+      HRMS_SMTP_PORT: "${HRMS_SMTP_PORT:-587}"
+      HRMS_SMTP_USERNAME: "${HRMS_SMTP_USERNAME:-}"
+      HRMS_SMTP_PASSWORD: "${HRMS_SMTP_PASSWORD:-}"
+      HRMS_SMTP_USE_SSL: "${HRMS_SMTP_USE_SSL:-false}"
+      HRMS_SMTP_FROM_EMAIL: "${HRMS_SMTP_FROM_EMAIL:-}"
+      HRMS_SMTP_FROM_NAME: "${HRMS_SMTP_FROM_NAME:-HRMS — Employee Data Management}"
+      HRMS_MAIL_RELAY_URL: "${HRMS_MAIL_RELAY_URL:-}"
+      HRMS_MAIL_RELAY_SECRET: "${HRMS_MAIL_RELAY_SECRET:-}"
+
     volumes:
       - ./data:/data
 

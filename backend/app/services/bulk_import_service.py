@@ -2,10 +2,10 @@
 entry point). Each row creates a Draft Employee + EmploymentEpisode (same
 status a single "New Employee" click starts at) with as much of Personal
 Information / Address / Employment Information / Organizational
-Assignment filled in as the row provides - Statutory/Bank/Documents/
-Dependents/Nominees/Driving Licence stay per-employee, filled in later via
-the wizard, since they don't fit a flat spreadsheet row well (multi-value
-or file-upload fields).
+Assignment / Statutory / Bank / Dependents (up to 3) / Nominees (up to 3)
+filled in as the row provides - Documents/Driving Licence stay
+per-employee, filled in later via the wizard, since they don't fit a flat
+spreadsheet row well (file-upload fields).
 """
 import io
 from datetime import date, datetime
@@ -15,13 +15,13 @@ from openpyxl.styles import Font
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.validators import validate_aadhaar, validate_pan
-from app.models.enums import AddressType, AuditAction, EpisodeStatus
+from app.core.validators import validate_aadhaar, validate_ifsc, validate_mobile, validate_pan
+from app.models.enums import AddressType, AuditAction, EpisodeStatus, RoleName, TransactionType
 from app.models.models import (
-    Employee, EmploymentEpisode, Address, OrgAssignment,
+    BankAccount, Dependent, Employee, EmploymentEpisode, Address, Nominee, OrgAssignment, StatutoryInfo,
     CostCenter, Department, Project, EmployeeCategory, EmployeeType, Designation, WorkLocation, User,
 )
-from app.services import audit_service, employee_service
+from app.services import audit_service, employee_service, approval_service
 
 # (field_key, column_header). Order here is the order columns appear in
 # the downloadable template. "*" in the header marks a required field.
@@ -73,6 +73,56 @@ COLUMNS = [
     ("department", "Department (must match Organization Setup)"),
     ("project", "Project (must match Organization Setup, optional)"),
     ("assignment_effective_from", "Assignment Effective From (YYYY-MM-DD)"),
+    ("pf_eligible", "PF Eligible (YES/NO)"),
+    ("pf_name_on_file", "PF Name On File"),
+    ("uan", "UAN"),
+    ("pf_effective_date", "PF Effective Date (YYYY-MM-DD)"),
+    ("esi_eligible", "ESI Eligible (YES/NO)"),
+    ("esi_name_on_file", "ESI Name On File"),
+    ("esi_number", "ESI Number"),
+    ("esi_mediclaim_number", "ESI Mediclaim Number"),
+    ("esi_effective_date", "ESI Effective Date (YYYY-MM-DD)"),
+    ("pt_eligible", "PT Eligible (YES/NO)"),
+    ("gratuity_eligible", "Gratuity Eligible (YES/NO)"),
+    ("statutory_effective_from", "Statutory Effective From (YYYY-MM-DD)"),
+    ("bank_name", "Bank Name"),
+    ("bank_branch", "Bank Branch"),
+    ("bank_account_number", "Bank Account Number"),
+    ("bank_ifsc", "Bank IFSC"),
+    ("bank_account_holder_name", "Bank Account Holder Name"),
+    ("bank_account_type", "Bank Account Type"),
+    ("bank_payment_mode", "Bank Payment Mode"),
+    ("bank_effective_from", "Bank Effective From (YYYY-MM-DD)"),
+    ("dependent_1_name", "Dependent 1 Name"),
+    ("dependent_1_relationship", "Dependent 1 Relationship"),
+    ("dependent_1_date_of_birth", "Dependent 1 Date of Birth (YYYY-MM-DD)"),
+    ("dependent_2_name", "Dependent 2 Name"),
+    ("dependent_2_relationship", "Dependent 2 Relationship"),
+    ("dependent_2_date_of_birth", "Dependent 2 Date of Birth (YYYY-MM-DD)"),
+    ("dependent_3_name", "Dependent 3 Name"),
+    ("dependent_3_relationship", "Dependent 3 Relationship"),
+    ("dependent_3_date_of_birth", "Dependent 3 Date of Birth (YYYY-MM-DD)"),
+    ("nominee_1_name", "Nominee 1 Name"),
+    ("nominee_1_relationship", "Nominee 1 Relationship"),
+    ("nominee_1_date_of_birth", "Nominee 1 Date of Birth (YYYY-MM-DD)"),
+    ("nominee_1_address", "Nominee 1 Address"),
+    ("nominee_1_mobile", "Nominee 1 Mobile"),
+    ("nominee_1_percentage", "Nominee 1 Percentage"),
+    ("nominee_1_nomination_type", "Nominee 1 Nomination Type (PF/GRATUITY/INSURANCE/OTHER)"),
+    ("nominee_2_name", "Nominee 2 Name"),
+    ("nominee_2_relationship", "Nominee 2 Relationship"),
+    ("nominee_2_date_of_birth", "Nominee 2 Date of Birth (YYYY-MM-DD)"),
+    ("nominee_2_address", "Nominee 2 Address"),
+    ("nominee_2_mobile", "Nominee 2 Mobile"),
+    ("nominee_2_percentage", "Nominee 2 Percentage"),
+    ("nominee_2_nomination_type", "Nominee 2 Nomination Type (PF/GRATUITY/INSURANCE/OTHER)"),
+    ("nominee_3_name", "Nominee 3 Name"),
+    ("nominee_3_relationship", "Nominee 3 Relationship"),
+    ("nominee_3_date_of_birth", "Nominee 3 Date of Birth (YYYY-MM-DD)"),
+    ("nominee_3_address", "Nominee 3 Address"),
+    ("nominee_3_mobile", "Nominee 3 Mobile"),
+    ("nominee_3_percentage", "Nominee 3 Percentage"),
+    ("nominee_3_nomination_type", "Nominee 3 Nomination Type (PF/GRATUITY/INSURANCE/OTHER)"),
 ]
 
 SAMPLE_ROW = {
@@ -95,6 +145,21 @@ SAMPLE_ROW = {
     "date_of_joining": "2026-01-01", "confirmation_date": "",
     "cost_center": "Puducherry", "department": "Operations", "project": "",
     "assignment_effective_from": "2026-01-01",
+    "pf_eligible": "YES", "pf_name_on_file": "Ravi Kumar", "uan": "", "pf_effective_date": "2026-01-01",
+    "esi_eligible": "NO", "esi_name_on_file": "", "esi_number": "", "esi_mediclaim_number": "", "esi_effective_date": "",
+    "pt_eligible": "YES", "gratuity_eligible": "YES", "statutory_effective_from": "2026-01-01",
+    "bank_name": "State Bank of India", "bank_branch": "Puducherry Main", "bank_account_number": "12345678901",
+    "bank_ifsc": "SBIN0001234", "bank_account_holder_name": "Ravi Kumar", "bank_account_type": "Savings",
+    "bank_payment_mode": "NEFT", "bank_effective_from": "2026-01-01",
+    "dependent_1_name": "Lakshmi Kumar", "dependent_1_relationship": "Spouse", "dependent_1_date_of_birth": "1994-03-10",
+    "dependent_2_name": "", "dependent_2_relationship": "", "dependent_2_date_of_birth": "",
+    "dependent_3_name": "", "dependent_3_relationship": "", "dependent_3_date_of_birth": "",
+    "nominee_1_name": "Lakshmi Kumar", "nominee_1_relationship": "Spouse", "nominee_1_date_of_birth": "1994-03-10",
+    "nominee_1_address": "", "nominee_1_mobile": "", "nominee_1_percentage": 100, "nominee_1_nomination_type": "PF",
+    "nominee_2_name": "", "nominee_2_relationship": "", "nominee_2_date_of_birth": "",
+    "nominee_2_address": "", "nominee_2_mobile": "", "nominee_2_percentage": "", "nominee_2_nomination_type": "",
+    "nominee_3_name": "", "nominee_3_relationship": "", "nominee_3_date_of_birth": "",
+    "nominee_3_address": "", "nominee_3_mobile": "", "nominee_3_percentage": "", "nominee_3_nomination_type": "",
 }
 
 
@@ -164,10 +229,152 @@ def _cell_float(value) -> float | None:
         return None
 
 
+def _cell_bool(value) -> bool:
+    return (_cell_str(value) or "").upper() in ("YES", "Y", "TRUE", "1")
+
+
 def _lookup(db: Session, model, name: str | None):
     if not name:
         return None
     return db.query(model).filter(model.name == name, model.is_active.is_(True)).first()
+
+
+def _apply_or_request(db: Session, episode: EmploymentEpisode, transaction_type: str, changes: dict, actor: User) -> bool | None:
+    """Mirrors routers/employees.py::_save_or_request exactly (HR_ADMIN or
+    a non-ACTIVE episode applies directly, otherwise a ChangeRequest is
+    queued) so a bulk-uploaded row updating an ACTIVE employee behaves
+    identically to a human editing that employee by hand. Returns True if
+    applied directly, False if queued, None if `changes` was empty (nothing
+    to do)."""
+    if not changes:
+        return None
+    if actor.role.name == RoleName.HR_ADMIN or episode.status != EpisodeStatus.ACTIVE:
+        approval_service.apply_changes(db, episode, transaction_type, changes)
+        audit_service.record(db, transaction_type, episode.id, AuditAction.UPDATE, actor, new_value="bulk upload")
+        return True
+    approval_service.create_change_request(db, episode, transaction_type, changes, actor)
+    return False
+
+
+# Personal/Identity fields (Employee model) a bulk-upload row can update on
+# an existing match. Only non-empty cells are included per row so blank
+# cells never blank out existing data.
+_PERSONAL_STR_FIELDS = (
+    "first_name", "middle_name", "last_name", "father_husband_name", "gender",
+    "marital_status", "educational_qualification", "mobile_number", "alternate_mobile_number",
+    "personal_email", "official_email", "emergency_contact_name",
+    "emergency_contact_relationship", "emergency_contact_mobile",
+    "previous_designation", "previous_company_name", "previous_company_details",
+)
+_PERSONAL_DATE_FIELDS = ("date_of_birth", "previous_date_of_joining")
+
+# Employment fields (EmploymentEpisode model) - excludes employee_number,
+# which is the row's match key, not a field to change.
+_EMPLOYMENT_DATE_FIELDS = ("date_of_joining", "confirmation_date")
+
+
+def _build_personal_changes(db: Session, data: dict) -> dict:
+    changes = {}
+    for field in _PERSONAL_STR_FIELDS:
+        value = _cell_str(data.get(field))
+        if value is not None:
+            changes[field] = value
+    for field in _PERSONAL_DATE_FIELDS:
+        value = _cell_date(data.get(field))
+        if value is not None:
+            changes[field] = value
+    experience = _cell_float(data.get("total_experience_years"))
+    if experience is not None:
+        changes["total_experience_years"] = experience
+    aadhaar = _cell_str(data.get("aadhaar"))
+    if aadhaar is not None:
+        changes["aadhaar"] = validate_aadhaar(aadhaar)
+    pan = _cell_str(data.get("pan"))
+    if pan is not None:
+        changes["pan"] = validate_pan(pan)
+    return changes
+
+
+def _build_employment_changes(db: Session, data: dict) -> dict:
+    changes = {}
+    employment_type = _lookup(db, EmployeeType, _cell_str(data.get("employment_type")))
+    if employment_type:
+        changes["employment_type_id"] = employment_type.id
+    employee_category = _lookup(db, EmployeeCategory, _cell_str(data.get("employee_category")))
+    if employee_category:
+        changes["employee_category_id"] = employee_category.id
+    designation = _lookup(db, Designation, _cell_str(data.get("designation")))
+    if designation:
+        changes["designation_id"] = designation.id
+    work_location = _lookup(db, WorkLocation, _cell_str(data.get("work_location")))
+    if work_location:
+        changes["work_location_id"] = work_location.id
+    shift_group = _cell_str(data.get("shift_group"))
+    if shift_group is not None:
+        changes["shift_group"] = shift_group
+    for field in _EMPLOYMENT_DATE_FIELDS:
+        value = _cell_date(data.get(field))
+        if value is not None:
+            changes[field] = value
+    return changes
+
+
+def _update_existing_row(db: Session, episode: EmploymentEpisode, data: dict, actor: User) -> dict:
+    """Upserts an already-matched employee_number: applies changes through
+    the exact same direct-apply / ChangeRequest branching a human edit
+    would go through (_apply_or_request above), Address directly (never
+    ChangeRequest-gated, same as today), and OrgAssignment directly
+    (same convention OrgAssignment already follows everywhere else)."""
+    employee = episode.employee
+
+    personal_changes = _build_personal_changes(db, data)
+    personal_applied = _apply_or_request(db, episode, TransactionType.IDENTITY_CHANGE, personal_changes, actor)
+
+    employment_changes = _build_employment_changes(db, data)
+    employment_applied = _apply_or_request(db, episode, TransactionType.EMPLOYMENT_CHANGE, employment_changes, actor)
+
+    present_fields = {f: _cell_str(data.get(f"present_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
+    if any(present_fields.values()):
+        row = db.query(Address).filter(Address.employee_id == employee.id, Address.address_type == AddressType.PRESENT).first()
+        if not row:
+            row = Address(employee_id=employee.id, address_type=AddressType.PRESENT)
+        for field, value in present_fields.items():
+            if value is not None:
+                setattr(row, field, value)
+        db.add(row)
+
+    same_as_present = (_cell_str(data.get("same_as_present")) or "").upper() in ("YES", "Y", "TRUE", "1")
+    permanent_fields = present_fields if same_as_present else {f: _cell_str(data.get(f"permanent_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
+    if any(permanent_fields.values()):
+        row = db.query(Address).filter(Address.employee_id == employee.id, Address.address_type == AddressType.PERMANENT).first()
+        if not row:
+            row = Address(employee_id=employee.id, address_type=AddressType.PERMANENT)
+        for field, value in permanent_fields.items():
+            if value is not None:
+                setattr(row, field, value)
+        db.add(row)
+
+    org_changed = False
+    cost_center = _lookup(db, CostCenter, _cell_str(data.get("cost_center")))
+    department = _lookup(db, Department, _cell_str(data.get("department")))
+    if cost_center and department:
+        current = db.query(OrgAssignment).filter(OrgAssignment.episode_id == episode.id, OrgAssignment.effective_to.is_(None)).first()
+        if not current or current.cost_center_id != cost_center.id or current.department_id != department.id:
+            project = _lookup(db, Project, _cell_str(data.get("project")))
+            employee_service.add_org_assignment(db, episode.id, {
+                "cost_center_id": cost_center.id, "department_id": department.id,
+                "project_id": project.id if project else None,
+                "effective_from": _cell_date(data.get("assignment_effective_from")) or date.today(),
+            })
+            audit_service.record(db, "ORG_ASSIGNMENT", episode.id, AuditAction.CREATE, actor, new_value="bulk upload")
+            org_changed = True
+
+    audit_service.record(db, "EMPLOYEE_DRAFT", episode.id, AuditAction.UPDATE, actor, new_value="bulk upload update")
+
+    return {
+        "updated": bool(personal_applied or employment_applied or any(present_fields.values()) or any(permanent_fields.values()) or org_changed),
+        "submitted_for_approval": personal_applied is False or employment_applied is False,
+    }
 
 
 def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
@@ -183,6 +390,8 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
                 break
 
     created = 0
+    updated = 0
+    submitted_for_approval = 0
     errors = []
 
     for row_number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
@@ -205,8 +414,15 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
 
         savepoint = db.begin_nested()
         try:
-            if db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first():
-                raise ValueError(f"Employee Number '{employee_number}' already in use")
+            existing_episode = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first()
+            if existing_episode:
+                outcome = _update_existing_row(db, existing_episode, data, actor)
+                savepoint.commit()
+                if outcome["updated"]:
+                    updated += 1
+                if outcome["submitted_for_approval"]:
+                    submitted_for_approval += 1
+                continue
 
             aadhaar = _cell_str(data.get("aadhaar"))
             if aadhaar:
@@ -277,6 +493,68 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
                     "effective_from": _cell_date(data.get("assignment_effective_from")) or date.today(),
                 })
 
+            if any(_cell_str(data.get(f)) for f in (
+                "pf_name_on_file", "uan", "pf_effective_date", "esi_name_on_file", "esi_number",
+                "esi_mediclaim_number", "esi_effective_date",
+            )) or _cell_bool(data.get("pf_eligible")) or _cell_bool(data.get("esi_eligible")) \
+                    or _cell_bool(data.get("pt_eligible")) or _cell_bool(data.get("gratuity_eligible")):
+                db.add(StatutoryInfo(
+                    episode_id=episode.id,
+                    pf_eligible=_cell_bool(data.get("pf_eligible")),
+                    pf_name_on_file=_cell_str(data.get("pf_name_on_file")),
+                    uan=_cell_str(data.get("uan")),
+                    pf_effective_date=_cell_date(data.get("pf_effective_date")),
+                    esi_eligible=_cell_bool(data.get("esi_eligible")),
+                    esi_name_on_file=_cell_str(data.get("esi_name_on_file")),
+                    esi_number=_cell_str(data.get("esi_number")),
+                    esi_mediclaim_number=_cell_str(data.get("esi_mediclaim_number")),
+                    esi_effective_date=_cell_date(data.get("esi_effective_date")),
+                    pt_eligible=_cell_bool(data.get("pt_eligible")),
+                    gratuity_eligible=_cell_bool(data.get("gratuity_eligible")),
+                    effective_from=_cell_date(data.get("statutory_effective_from")) or date.today(),
+                ))
+
+            bank_fields = {
+                "bank_name": _cell_str(data.get("bank_name")),
+                "branch": _cell_str(data.get("bank_branch")),
+                "account_number": _cell_str(data.get("bank_account_number")),
+                "ifsc": validate_ifsc(_cell_str(data.get("bank_ifsc"))) if _cell_str(data.get("bank_ifsc")) else None,
+                "account_holder_name": _cell_str(data.get("bank_account_holder_name")),
+                "account_type": _cell_str(data.get("bank_account_type")),
+                "payment_mode": _cell_str(data.get("bank_payment_mode")),
+            }
+            if any(bank_fields.values()):
+                db.add(BankAccount(
+                    episode_id=episode.id,
+                    effective_from=_cell_date(data.get("bank_effective_from")) or date.today(),
+                    **bank_fields,
+                ))
+
+            for n in (1, 2, 3):
+                name = _cell_str(data.get(f"dependent_{n}_name"))
+                if not name:
+                    continue
+                db.add(Dependent(
+                    episode_id=episode.id, name=name,
+                    relationship_type=_cell_str(data.get(f"dependent_{n}_relationship")),
+                    date_of_birth=_cell_date(data.get(f"dependent_{n}_date_of_birth")),
+                ))
+
+            for n in (1, 2, 3):
+                name = _cell_str(data.get(f"nominee_{n}_name"))
+                if not name:
+                    continue
+                mobile = _cell_str(data.get(f"nominee_{n}_mobile"))
+                db.add(Nominee(
+                    episode_id=episode.id, name=name,
+                    relationship_type=_cell_str(data.get(f"nominee_{n}_relationship")),
+                    date_of_birth=_cell_date(data.get(f"nominee_{n}_date_of_birth")),
+                    address=_cell_str(data.get(f"nominee_{n}_address")),
+                    mobile=validate_mobile(mobile) if mobile else None,
+                    percentage=_cell_float(data.get(f"nominee_{n}_percentage")),
+                    nomination_type=_cell_str(data.get(f"nominee_{n}_nomination_type")),
+                ))
+
             audit_service.record(db, "EMPLOYEE_DRAFT", episode.id, AuditAction.CREATE, actor, new_value="bulk upload")
             savepoint.commit()
             created += 1
@@ -284,4 +562,4 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
             savepoint.rollback()
             errors.append({"row": row_number, "message": str(exc.__cause__ or exc) if isinstance(exc, IntegrityError) else str(exc)})
 
-    return {"created": created, "errors": errors}
+    return {"created": created, "updated": updated, "submitted_for_approval": submitted_for_approval, "errors": errors}

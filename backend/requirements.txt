@@ -16,3 +16,10 @@ boto3==1.34.162
 
 # Bulk employee upload / downloadable template (.xlsx)
 openpyxl==3.1.5
+
+# Safe formula evaluation for FORMULA-type salary components (e.g.
+# "BASIC * 0.4" for HRA, or referencing attendance day-count variables)
+simpleeval==0.9.13
+
+# Outbound email via the cPanel HTTP mail relay (services/email_service.py)
+requests==2.31.0

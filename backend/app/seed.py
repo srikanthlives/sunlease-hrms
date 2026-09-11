@@ -2,6 +2,8 @@
 org structure + a testable HR_STAFF/APPROVER pair with Cost Center scope,
 so the RBAC and approval-routing flow (blueprint §15/§18) is exercisable
 immediately after a fresh seed. Safe to re-run (idempotent)."""
+import datetime as dt
+
 from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.migrate import migrate
@@ -9,7 +11,8 @@ from app.models.models import (
     Role, User, RolePermission, UserCostCenterScope, ApprovalRule,
     Company, CostCenter, Department, Project, EmployeeCategory,
     WorkLocation, Designation, EmployeeType, DocumentType, DocumentRequirement,
-    DrivingLicenceRequirement,
+    DrivingLicenceRequirement, ShiftMaster, LeaveType, LeaveEligibilityRule,
+    SalaryComponent, StatutoryConfig,
 )
 from app.models.enums import RoleName, Permission, TransactionType
 
@@ -171,6 +174,79 @@ try:
             approver_role=RoleName.APPROVER,
             cost_center_id=None, employee_category_id=None,
         ))
+
+    # Module 2: Shift masters (blueprint §23).
+    shift_seed = [
+        dict(code="GEN", name="General Shift", start_time=dt.time(9, 0), end_time=dt.time(18, 0), grace_minutes=10),
+        dict(code="MOR", name="Morning Shift", start_time=dt.time(6, 0), end_time=dt.time(14, 0)),
+        dict(code="NIGHT", name="Night Shift", start_time=dt.time(22, 0), end_time=dt.time(6, 0), is_night_shift=True),
+    ]
+    for s in shift_seed:
+        if not db.query(ShiftMaster).filter(ShiftMaster.code == s["code"]).first():
+            db.add(ShiftMaster(**s))
+    db.flush()
+
+    # Module 2: Leave types + a global eligibility rule per type (annual
+    # entitlement, no Cost Center/Category scoping - reasonable
+    # Indian-context defaults).
+    leave_type_seed = [
+        dict(code="CL", name="Casual Leave", is_paid=True, accrual_frequency="YEARLY", accrual_amount=12, entitlement=12),
+        dict(code="SL", name="Sick Leave", is_paid=True, accrual_frequency="YEARLY", accrual_amount=12, entitlement=12),
+        dict(code="EL", name="Earned Leave", is_paid=True, accrual_frequency="MONTHLY", accrual_amount=1.25, entitlement=15),
+    ]
+    for lt in leave_type_seed:
+        leave_type = db.query(LeaveType).filter(LeaveType.code == lt["code"]).first()
+        if not leave_type:
+            leave_type = LeaveType(
+                code=lt["code"], name=lt["name"], is_paid=lt["is_paid"],
+                accrual_frequency=lt["accrual_frequency"], accrual_amount=lt["accrual_amount"],
+            )
+            db.add(leave_type)
+            db.flush()
+        if not db.query(LeaveEligibilityRule).filter(
+            LeaveEligibilityRule.leave_type_id == leave_type.id,
+            LeaveEligibilityRule.employee_category_id.is_(None),
+            LeaveEligibilityRule.cost_center_id.is_(None),
+        ).first():
+            db.add(LeaveEligibilityRule(
+                leave_type_id=leave_type.id, employee_category_id=None, cost_center_id=None,
+                min_service_months=0, annual_entitlement=lt["entitlement"],
+            ))
+    db.flush()
+
+    # Module 3: Salary component master (Basic/HRA/etc. as EARNING,
+    # PF/ESI/PT/LWF as statutory DEDUCTION, employer contributions as
+    # EMPLOYER_CONTRIBUTION). Professional Tax Slabs deliberately left
+    # unseeded - state-specific, admin fills in for their state(s).
+    salary_component_seed = [
+        dict(code="BASIC", name="Basic", component_type="EARNING", sequence=1),
+        dict(code="HRA", name="House Rent Allowance", component_type="EARNING", sequence=2),
+        dict(code="CONVEYANCE", name="Conveyance Allowance", component_type="EARNING", sequence=3),
+        dict(code="SPECIAL_ALLOWANCE", name="Special Allowance", component_type="EARNING", sequence=4),
+        dict(code="PF", name="Provident Fund", component_type="DEDUCTION", is_statutory=True, sequence=10),
+        dict(code="ESI", name="Employee State Insurance", component_type="DEDUCTION", is_statutory=True, sequence=11),
+        dict(code="PT", name="Professional Tax", component_type="DEDUCTION", is_statutory=True, sequence=12),
+        dict(code="LWF", name="Labour Welfare Fund", component_type="DEDUCTION", is_statutory=True, sequence=13),
+        dict(code="EMPLOYER_PF", name="Employer PF Contribution", component_type="EMPLOYER_CONTRIBUTION", is_statutory=True, sequence=20),
+        dict(code="EMPLOYER_ESI", name="Employer ESI Contribution", component_type="EMPLOYER_CONTRIBUTION", is_statutory=True, sequence=21),
+    ]
+    for sc in salary_component_seed:
+        if not db.query(SalaryComponent).filter(SalaryComponent.code == sc["code"]).first():
+            db.add(SalaryComponent(**sc))
+    db.flush()
+
+    # Module 3: One active StatutoryConfig row (PF/ESI at researched
+    # current rates, PT/LWF left at zero for admin to configure).
+    if not db.query(StatutoryConfig).filter(StatutoryConfig.effective_to.is_(None)).first():
+        db.add(StatutoryConfig(
+            effective_from=dt.date(2025, 1, 1), effective_to=None,
+            pf_employee_rate=0.12, pf_employer_rate=0.12, pf_wage_ceiling=15000,
+            eps_rate=0.0833, eps_wage_ceiling=15000,
+            esi_employee_rate=0.0075, esi_employer_rate=0.0325, esi_wage_ceiling=21000,
+            gratuity_days_per_year=15, gratuity_divisor=26,
+            lwf_employee_amount=0, lwf_employer_amount=0, lwf_frequency="MONTHLY",
+        ))
+    db.flush()
 
     db.commit()
     print("Seed complete.")

@@ -116,11 +116,35 @@ class Permission:
     USERS_MANAGE = "users.manage"
     AUDIT_VIEW = "audit.view"
 
+    # Module 2: Attendance + Leave (blueprint §23)
+    ATTENDANCE_VIEW = "attendance.view"
+    ATTENDANCE_MARK = "attendance.mark"
+    ROSTER_MANAGE = "roster.manage"
+    ATTENDANCE_CORRECT = "attendance.correct"
+    ATTENDANCE_APPROVE = "attendance.approve"
+    LEAVE_APPLY = "leave.apply"
+    LEAVE_APPROVE = "leave.approve"
+    LEAVE_ADMIN = "leave.admin"
+
+    # Module 3/4: Payroll + Statutory Compliance
+    PAYROLL_VIEW = "payroll.view"
+    PAYROLL_PROCESS = "payroll.process"
+    PAYROLL_APPROVE = "payroll.approve"
+    PAYROLL_LOCK = "payroll.lock"
+    PAYSLIP_VIEW = "payslip.view"
+    FNF_PROCESS = "fnf.process"
+    COMPLIANCE_VIEW = "compliance.view"
+    COMPLIANCE_FILE = "compliance.file"
+
     ALL = [
         EMPLOYEE_VIEW, EMPLOYEE_CREATE, EMPLOYEE_EDIT, EMPLOYEE_APPROVE, EMPLOYEE_SEPARATE,
         EMPLOYEE_SENSITIVE_VIEW, EMPLOYEE_SENSITIVE_EDIT,
         EMPLOYEE_DOCUMENTS_VIEW, EMPLOYEE_DOCUMENTS_UPLOAD,
         CHANGE_REQUESTS_REVIEW, ORG_MANAGE, USERS_MANAGE, AUDIT_VIEW,
+        ATTENDANCE_VIEW, ATTENDANCE_MARK, ROSTER_MANAGE, ATTENDANCE_CORRECT,
+        ATTENDANCE_APPROVE, LEAVE_APPLY, LEAVE_APPROVE, LEAVE_ADMIN,
+        PAYROLL_VIEW, PAYROLL_PROCESS, PAYROLL_APPROVE, PAYROLL_LOCK,
+        PAYSLIP_VIEW, FNF_PROCESS, COMPLIANCE_VIEW, COMPLIANCE_FILE,
     ]
 
     # Seed-time default grants per role (see seed.py). HR_ADMIN is not
@@ -136,12 +160,33 @@ class Permission:
             EMPLOYEE_DOCUMENTS_VIEW, EMPLOYEE_DOCUMENTS_UPLOAD,
             # HR_STAFF also runs the exit flow day to day (blueprint §16).
             EMPLOYEE_SEPARATE,
+            # Module 2: HR_STAFF runs roster/attendance day to day and
+            # administers leave configuration.
+            ATTENDANCE_VIEW, ATTENDANCE_MARK, ROSTER_MANAGE, ATTENDANCE_CORRECT,
+            LEAVE_APPLY, LEAVE_ADMIN,
+            # Module 3/4: HR_STAFF runs payroll processing, ad-hoc entries,
+            # full & final settlement, and compliance filing day to day.
+            # PAYROLL_LOCK is deliberately excluded - HR_ADMIN-only.
+            PAYROLL_VIEW, PAYROLL_PROCESS, PAYSLIP_VIEW, FNF_PROCESS,
+            COMPLIANCE_VIEW, COMPLIANCE_FILE,
         ],
         RoleName.APPROVER: [
             EMPLOYEE_VIEW, EMPLOYEE_APPROVE, EMPLOYEE_SENSITIVE_VIEW,
             CHANGE_REQUESTS_REVIEW, AUDIT_VIEW,
+            # Module 2: APPROVER reviews attendance corrections/overtime
+            # and leave applications.
+            ATTENDANCE_VIEW, ATTENDANCE_APPROVE, LEAVE_APPROVE,
+            # Module 3/4: APPROVER reviews/approves payroll runs and views
+            # compliance records, but does not process or lock.
+            PAYROLL_VIEW, PAYROLL_APPROVE, PAYSLIP_VIEW, COMPLIANCE_VIEW,
         ],
-        RoleName.EMPLOYEE: [],
+        RoleName.EMPLOYEE: [
+            # Module 2: EMPLOYEE can view their own attendance and apply
+            # for leave (self-service login itself is still deferred).
+            ATTENDANCE_VIEW, LEAVE_APPLY,
+            # Module 3: EMPLOYEE can view their own payslips.
+            PAYSLIP_VIEW,
+        ],
     }
 
 
@@ -158,7 +203,17 @@ class TransactionType:
     SEPARATION = "SEPARATION"
     DOCUMENT_CHANGE = "DOCUMENT_CHANGE"
 
+    # Module 2: Attendance + Leave (blueprint §23)
+    ATTENDANCE_CORRECTION = "ATTENDANCE_CORRECTION"
+    OVERTIME_APPROVAL = "OVERTIME_APPROVAL"
+    LEAVE_APPLICATION = "LEAVE_APPLICATION"
+
+    # Module 3: Payroll (blueprint §23)
+    PAYROLL_PROCESSING = "PAYROLL_PROCESSING"
+
     ALL = [
         EMPLOYEE_CREATION, IDENTITY_CHANGE, EMPLOYMENT_CHANGE, ORG_CHANGE,
         BANK_CHANGE, STATUTORY_CHANGE, SEPARATION, DOCUMENT_CHANGE,
+        ATTENDANCE_CORRECTION, OVERTIME_APPROVAL, LEAVE_APPLICATION,
+        PAYROLL_PROCESSING,
     ]

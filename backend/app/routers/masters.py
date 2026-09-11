@@ -9,6 +9,8 @@ from app.models.models import (
     WorkLocation, Designation, EmployeeType, DocumentType, DocumentRequirement,
     DrivingLicenceRequirement,
     Role, RolePermission, UserCostCenterScope, ApprovalRule, User,
+    OrgAssignment, CostAllocation, EmploymentEpisode, HolidayCalendar,
+    PayrollRun, PayslipCostSplit, ComplianceRecord, LeaveEligibilityRule,
 )
 from app.schemas.masters import (
     CompanyIn, CompanyOut, CostCenterIn, CostCenterOut,
@@ -22,6 +24,25 @@ from app.schemas.masters import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["masters"])
+
+
+def _delete_or_deactivate(db: Session, obj, usage_checks: list) -> dict:
+    """Physically deletes `obj` if nothing references it yet; otherwise
+    falls back to the existing soft-deactivate (is_active=False) so rows
+    already pointing at it keep working. `usage_checks` is a list of
+    (Model, column) pairs to check for a referencing row."""
+    in_use = any(
+        db.query(model).filter(column == obj.id).first() is not None
+        for model, column in usage_checks
+    )
+    if in_use:
+        obj.is_active = False
+        db.add(obj)
+        db.commit()
+        return {"ok": True, "deleted": False}
+    db.delete(obj)
+    db.commit()
+    return {"ok": True, "deleted": True}
 
 # Organization setup (Company/Cost Center/Project/Department/Employee
 # Category) is the org-model foundation (blueprint §2, §13) - HR Admin
@@ -73,8 +94,22 @@ def deactivate_company(company_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/cost-centers", response_model=list[CostCenterOut])
-def list_cost_centers(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(CostCenter).filter(CostCenter.is_active.is_(True)).all()
+def list_cost_centers(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    query = db.query(CostCenter)
+    if not include_inactive:
+        query = query.filter(CostCenter.is_active.is_(True))
+    return query.all()
+
+
+@router.post("/cost-centers/{cost_center_id}/activate", dependencies=[Depends(require_hr_admin)])
+def activate_cost_center(cost_center_id: int, db: Session = Depends(get_db)):
+    obj = db.query(CostCenter).filter(CostCenter.id == cost_center_id).first()
+    if not obj:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Cost Center not found")
+    obj.is_active = True
+    db.add(obj)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/cost-centers", response_model=CostCenterOut, dependencies=[Depends(require_hr_admin)])
@@ -109,15 +144,33 @@ def deactivate_cost_center(cost_center_id: int, db: Session = Depends(get_db)):
     obj = db.query(CostCenter).filter(CostCenter.id == cost_center_id).first()
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cost Center not found")
-    obj.is_active = False
-    db.add(obj)
-    db.commit()
-    return {"ok": True}
+    return _delete_or_deactivate(db, obj, [
+        (OrgAssignment, OrgAssignment.cost_center_id), (CostAllocation, CostAllocation.cost_center_id),
+        (Project, Project.cost_center_id), (Department, Department.cost_center_id),
+        (UserCostCenterScope, UserCostCenterScope.cost_center_id), (ApprovalRule, ApprovalRule.cost_center_id),
+        (HolidayCalendar, HolidayCalendar.cost_center_id), (PayrollRun, PayrollRun.cost_center_id),
+        (PayslipCostSplit, PayslipCostSplit.cost_center_id), (ComplianceRecord, ComplianceRecord.cost_center_id),
+        (LeaveEligibilityRule, LeaveEligibilityRule.cost_center_id),
+    ])
 
 
 @router.get("/projects", response_model=list[ProjectOut])
-def list_projects(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(Project).filter(Project.is_active.is_(True)).all()
+def list_projects(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    query = db.query(Project)
+    if not include_inactive:
+        query = query.filter(Project.is_active.is_(True))
+    return query.all()
+
+
+@router.post("/projects/{project_id}/activate", dependencies=[Depends(require_hr_admin)])
+def activate_project(project_id: int, db: Session = Depends(get_db)):
+    obj = db.query(Project).filter(Project.id == project_id).first()
+    if not obj:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    obj.is_active = True
+    db.add(obj)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/projects", response_model=ProjectOut, dependencies=[Depends(require_hr_admin)])
@@ -152,15 +205,29 @@ def deactivate_project(project_id: int, db: Session = Depends(get_db)):
     obj = db.query(Project).filter(Project.id == project_id).first()
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
-    obj.is_active = False
-    db.add(obj)
-    db.commit()
-    return {"ok": True}
+    return _delete_or_deactivate(db, obj, [
+        (WorkLocation, WorkLocation.project_id), (CostAllocation, CostAllocation.project_id),
+        (OrgAssignment, OrgAssignment.project_id), (PayslipCostSplit, PayslipCostSplit.project_id),
+    ])
 
 
 @router.get("/departments", response_model=list[DepartmentOut])
-def list_departments(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(Department).filter(Department.is_active.is_(True)).all()
+def list_departments(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    query = db.query(Department)
+    if not include_inactive:
+        query = query.filter(Department.is_active.is_(True))
+    return query.all()
+
+
+@router.post("/departments/{department_id}/activate", dependencies=[Depends(require_hr_admin)])
+def activate_department(department_id: int, db: Session = Depends(get_db)):
+    obj = db.query(Department).filter(Department.id == department_id).first()
+    if not obj:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Department not found")
+    obj.is_active = True
+    db.add(obj)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/departments", response_model=DepartmentOut, dependencies=[Depends(require_hr_admin)])
@@ -195,15 +262,26 @@ def deactivate_department(department_id: int, db: Session = Depends(get_db)):
     obj = db.query(Department).filter(Department.id == department_id).first()
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Department not found")
-    obj.is_active = False
-    db.add(obj)
-    db.commit()
-    return {"ok": True}
+    return _delete_or_deactivate(db, obj, [(OrgAssignment, OrgAssignment.department_id)])
 
 
 @router.get("/employee-categories", response_model=list[EmployeeCategoryOut])
-def list_categories(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(EmployeeCategory).filter(EmployeeCategory.is_active.is_(True)).all()
+def list_categories(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    query = db.query(EmployeeCategory)
+    if not include_inactive:
+        query = query.filter(EmployeeCategory.is_active.is_(True))
+    return query.all()
+
+
+@router.post("/employee-categories/{category_id}/activate", dependencies=[Depends(require_hr_admin)])
+def activate_category(category_id: int, db: Session = Depends(get_db)):
+    obj = db.query(EmployeeCategory).filter(EmployeeCategory.id == category_id).first()
+    if not obj:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found")
+    obj.is_active = True
+    db.add(obj)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/employee-categories", response_model=EmployeeCategoryOut, dependencies=[Depends(require_hr_admin)])
@@ -238,16 +316,31 @@ def deactivate_category(category_id: int, db: Session = Depends(get_db)):
     obj = db.query(EmployeeCategory).filter(EmployeeCategory.id == category_id).first()
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found")
-    obj.is_active = False
-    db.add(obj)
-    db.commit()
-    return {"ok": True}
+    return _delete_or_deactivate(db, obj, [
+        (EmploymentEpisode, EmploymentEpisode.employee_category_id), (ApprovalRule, ApprovalRule.employee_category_id),
+        (DocumentRequirement, DocumentRequirement.employee_category_id),
+        (LeaveEligibilityRule, LeaveEligibilityRule.employee_category_id),
+    ])
 
 
 # Work Locations (linked to a Project)
 @router.get("/work-locations", response_model=list[WorkLocationOut])
-def list_work_locations(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(WorkLocation).filter(WorkLocation.is_active.is_(True)).all()
+def list_work_locations(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    query = db.query(WorkLocation)
+    if not include_inactive:
+        query = query.filter(WorkLocation.is_active.is_(True))
+    return query.all()
+
+
+@router.post("/work-locations/{work_location_id}/activate", dependencies=[Depends(require_hr_admin)])
+def activate_work_location(work_location_id: int, db: Session = Depends(get_db)):
+    obj = db.query(WorkLocation).filter(WorkLocation.id == work_location_id).first()
+    if not obj:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Work Location not found")
+    obj.is_active = True
+    db.add(obj)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/work-locations", response_model=WorkLocationOut, dependencies=[Depends(require_hr_admin)])
@@ -282,16 +375,27 @@ def deactivate_work_location(work_location_id: int, db: Session = Depends(get_db
     obj = db.query(WorkLocation).filter(WorkLocation.id == work_location_id).first()
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Work Location not found")
-    obj.is_active = False
-    db.add(obj)
-    db.commit()
-    return {"ok": True}
+    return _delete_or_deactivate(db, obj, [(EmploymentEpisode, EmploymentEpisode.work_location_id)])
 
 
 # Designations
 @router.get("/designations", response_model=list[DesignationOut])
-def list_designations(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(Designation).filter(Designation.is_active.is_(True)).all()
+def list_designations(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    query = db.query(Designation)
+    if not include_inactive:
+        query = query.filter(Designation.is_active.is_(True))
+    return query.all()
+
+
+@router.post("/designations/{designation_id}/activate", dependencies=[Depends(require_hr_admin)])
+def activate_designation(designation_id: int, db: Session = Depends(get_db)):
+    obj = db.query(Designation).filter(Designation.id == designation_id).first()
+    if not obj:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Designation not found")
+    obj.is_active = True
+    db.add(obj)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/designations", response_model=DesignationOut, dependencies=[Depends(require_hr_admin)])
@@ -326,16 +430,29 @@ def deactivate_designation(designation_id: int, db: Session = Depends(get_db)):
     obj = db.query(Designation).filter(Designation.id == designation_id).first()
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Designation not found")
-    obj.is_active = False
-    db.add(obj)
-    db.commit()
-    return {"ok": True}
+    return _delete_or_deactivate(db, obj, [
+        (EmploymentEpisode, EmploymentEpisode.designation_id), (DocumentRequirement, DocumentRequirement.designation_id),
+    ])
 
 
 # Employee Types (Employment Type master)
 @router.get("/employee-types", response_model=list[EmployeeTypeOut])
-def list_employee_types(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return db.query(EmployeeType).filter(EmployeeType.is_active.is_(True)).all()
+def list_employee_types(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    query = db.query(EmployeeType)
+    if not include_inactive:
+        query = query.filter(EmployeeType.is_active.is_(True))
+    return query.all()
+
+
+@router.post("/employee-types/{employee_type_id}/activate", dependencies=[Depends(require_hr_admin)])
+def activate_employee_type(employee_type_id: int, db: Session = Depends(get_db)):
+    obj = db.query(EmployeeType).filter(EmployeeType.id == employee_type_id).first()
+    if not obj:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee Type not found")
+    obj.is_active = True
+    db.add(obj)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/employee-types", response_model=EmployeeTypeOut, dependencies=[Depends(require_hr_admin)])
@@ -370,10 +487,9 @@ def deactivate_employee_type(employee_type_id: int, db: Session = Depends(get_db
     obj = db.query(EmployeeType).filter(EmployeeType.id == employee_type_id).first()
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee Type not found")
-    obj.is_active = False
-    db.add(obj)
-    db.commit()
-    return {"ok": True}
+    return _delete_or_deactivate(db, obj, [
+        (EmploymentEpisode, EmploymentEpisode.employment_type_id), (DocumentRequirement, DocumentRequirement.employee_type_id),
+    ])
 
 
 # ---------------------------------------------------------------------------

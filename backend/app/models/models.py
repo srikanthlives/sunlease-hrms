@@ -2,6 +2,7 @@ import datetime as dt
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text,
+    Time, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -354,6 +355,7 @@ class EmploymentEpisode(Base):
 
     date_of_joining = Column(Date)
     confirmation_date = Column(Date)
+    application_reference_number = Column(String(50))
 
     status = Column(String(30), default="DRAFT", nullable=False)
 
@@ -689,3 +691,590 @@ class AuditLog(Base):
     new_value = Column(Text)
     ip_address = Column(String(50))
     user_agent = Column(String(255))
+
+
+# ---------------------------------------------------------------------------
+# Module 2: Attendance (blueprint §23)
+# ---------------------------------------------------------------------------
+
+class ShiftMaster(Base):
+    """Admin-configurable shift master (General/Morning/Night etc.)."""
+
+    __tablename__ = "shift_masters"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(30), unique=True, nullable=False)
+    name = Column(String(100), nullable=False)
+    start_time = Column(Time, nullable=False)
+    end_time = Column(Time, nullable=False)
+    break_minutes = Column(Integer, default=0)
+    grace_minutes = Column(Integer, default=0)
+    half_day_hours = Column(Float, nullable=True)
+    full_day_hours = Column(Float, nullable=True)
+    is_night_shift = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+
+class WeeklyOffPattern(Base):
+    """Effective-dated recurring weekly-off rule (e.g. "Sunday off") - a
+    generator, not the source of truth; generate_roster() materializes it
+    into concrete RosterEntry rows. Mirrors OrgAssignment's effective-dating."""
+
+    __tablename__ = "weekly_off_patterns"
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    weekday = Column(Integer, nullable=False)  # 0=Monday .. 6=Sunday
+
+    effective_from = Column(Date, nullable=False)
+    effective_to = Column(Date, nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+
+
+class RosterEntry(Base):
+    """One row per (episode, date) - the calendar-based source of truth
+    for duty allocation, weekly offs, rest days and double shifts, that
+    AttendanceRecord reconciles against."""
+
+    __tablename__ = "roster_entries"
+    __table_args__ = (UniqueConstraint("episode_id", "date", name="uq_roster_entry_episode_date"),)
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    shift_id = Column(Integer, ForeignKey("shift_masters.id"), nullable=True)
+    second_shift_id = Column(Integer, ForeignKey("shift_masters.id"), nullable=True)  # double shift
+    is_weekly_off = Column(Boolean, default=False)
+    is_rest_day = Column(Boolean, default=False)
+    is_holiday = Column(Boolean, default=False)
+    remarks = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    shift = relationship("ShiftMaster", foreign_keys=[shift_id])
+    second_shift = relationship("ShiftMaster", foreign_keys=[second_shift_id])
+
+
+class AttendanceRecord(Base):
+    """One row per (episode, date) - actual attendance, reconciled
+    against RosterEntry."""
+
+    __tablename__ = "attendance_records"
+    __table_args__ = (UniqueConstraint("episode_id", "date", name="uq_attendance_record_episode_date"),)
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    shift_id = Column(Integer, ForeignKey("shift_masters.id"), nullable=True)
+    check_in = Column(DateTime, nullable=True)
+    check_out = Column(DateTime, nullable=True)
+    status = Column(String(20), default="PRESENT")  # PRESENT/ABSENT/HALF_DAY/ON_LEAVE/WEEKLY_OFF/HOLIDAY
+    late_minutes = Column(Integer, default=0)
+    early_departure_minutes = Column(Integer, default=0)
+    overtime_minutes = Column(Integer, default=0)
+    source = Column(String(20), default="MANUAL")  # MANUAL/CORRECTION
+    remarks = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    shift = relationship("ShiftMaster", foreign_keys=[shift_id])
+
+
+class AttendanceException(Base):
+    """LATE / EARLY_DEPARTURE / MISSED_PUNCH / ABSENT_UNPLANNED flags
+    raised against a day's attendance."""
+
+    __tablename__ = "attendance_exceptions"
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    exception_type = Column(String(30), nullable=False)
+    status = Column(String(20), default="OPEN")  # OPEN/RESOLVED
+    resolution_remarks = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+
+
+class AttendanceApprovalRequest(Base):
+    """Attendance correction + overtime approval, typed by request_type -
+    one shared table rather than two, mirrors ChangeRequest's single-table
+    design for identity/employment edits."""
+
+    __tablename__ = "attendance_approval_requests"
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    request_type = Column(String(20), nullable=False)  # CORRECTION/OVERTIME
+    requested_check_in = Column(DateTime, nullable=True)
+    requested_check_out = Column(DateTime, nullable=True)
+    requested_overtime_minutes = Column(Integer, nullable=True)
+    reason = Column(String(255), nullable=True)
+    status = Column(String(20), default="PENDING")  # PENDING/APPROVED/REJECTED
+    reviewed_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    review_remarks = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
+
+
+# ---------------------------------------------------------------------------
+# Module 2: Leave (blueprint §23)
+# ---------------------------------------------------------------------------
+
+class LeaveType(Base):
+    """Admin-configurable leave type master (Casual/Sick/Earned etc.)."""
+
+    __tablename__ = "leave_types"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(30), unique=True, nullable=False)
+    name = Column(String(100), nullable=False)
+    is_paid = Column(Boolean, default=True)
+    accrual_frequency = Column(String(20), default="NONE")  # MONTHLY/YEARLY/NONE
+    accrual_amount = Column(Float, default=0)
+    max_balance = Column(Float, nullable=True)
+    carry_forward_limit = Column(Float, nullable=True)
+    requires_approval = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+
+class LeaveEligibilityRule(Base):
+    """Which employees are entitled to a LeaveType and how much - matched
+    cost_center+category -> cost_center-only -> category-only -> global
+    fallback, same specificity cascade as approval_service.find_approval_rule."""
+
+    __tablename__ = "leave_eligibility_rules"
+
+    id = Column(Integer, primary_key=True)
+    leave_type_id = Column(Integer, ForeignKey("leave_types.id"), nullable=False)
+    employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=True)
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=True)
+    min_service_months = Column(Integer, default=0)
+    annual_entitlement = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=now)
+
+    leave_type = relationship("LeaveType")
+    employee_category = relationship("EmployeeCategory")
+    cost_center = relationship("CostCenter")
+
+
+class LeaveBalance(Base):
+    """Per (episode, leave_type, year) balance - accrual computed lazily
+    on read, no scheduler in this codebase."""
+
+    __tablename__ = "leave_balances"
+    __table_args__ = (UniqueConstraint("episode_id", "leave_type_id", "year", name="uq_leave_balance_episode_type_year"),)
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    leave_type_id = Column(Integer, ForeignKey("leave_types.id"), nullable=False)
+    year = Column(Integer, nullable=False)
+    opening_balance = Column(Float, default=0)
+    accrued = Column(Float, default=0)
+    used = Column(Float, default=0)
+    adjusted = Column(Float, default=0)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    leave_type = relationship("LeaveType")
+
+
+class LeaveApplication(Base):
+    """Leave application - balance deduction happens on approval, not on
+    apply, mirroring how OrgAssignment only closes/opens on the actual
+    state change."""
+
+    __tablename__ = "leave_applications"
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    leave_type_id = Column(Integer, ForeignKey("leave_types.id"), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    is_half_day = Column(Boolean, default=False)
+    half_day_session = Column(String(20), nullable=True)  # FIRST_HALF/SECOND_HALF
+    days = Column(Float, nullable=False)
+    reason = Column(String(255), nullable=True)
+    status = Column(String(20), default="PENDING")  # PENDING/APPROVED/REJECTED/CANCELLED
+    reviewed_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    review_remarks = Column(String(255), nullable=True)
+    attachment_object_key = Column(String(500), nullable=True)
+    attachment_file_name = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    leave_type = relationship("LeaveType")
+    reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
+
+
+class HolidayCalendar(Base):
+    """Holiday master - cost_center_id null means global/applies to all."""
+
+    __tablename__ = "holiday_calendar"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(150), nullable=False)
+    date = Column(Date, nullable=False)
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=True)
+    is_optional = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=now)
+
+    cost_center = relationship("CostCenter")
+
+
+# ---------------------------------------------------------------------------
+# Module 3: Payroll (blueprint §23)
+# ---------------------------------------------------------------------------
+
+class SalaryComponent(Base):
+    """Admin-configurable salary component master (Basic/HRA/PF/ESI etc.).
+    is_statutory rows (PF/ESI/PT/LWF/employer contributions) are computed
+    by the statutory engine at payroll-processing time rather than taken
+    from SalaryStructureComponent's amount/percentage. `formula` is a
+    simpleeval expression used when default_calculation="FORMULA" - it
+    may reference other components by code (resolved via a multi-pass
+    dependency solve, so e.g. HRA="BASIC*0.4" or GROSS="BASIC+HRA+CONVEYANCE"
+    both work) and the day-count variables computed by
+    payroll_service.compute_day_variables (PRESENT, ABSENT, HALF_DAY,
+    ON_LEAVE, WEEKLY_OFF, HOLIDAY, LATE_DAYS, EARLY_DEP_DAYS, OT_MIN,
+    NOT_MARKED), e.g. "BASIC * PRESENT / 30"."""
+
+    __tablename__ = "salary_components"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(150), nullable=False)
+    component_type = Column(String(30), nullable=False)  # EARNING/DEDUCTION/EMPLOYER_CONTRIBUTION
+    default_calculation = Column(String(30), default="FIXED")  # FIXED/PERCENTAGE_OF_BASIC/FORMULA
+    default_value = Column(Float, default=0)
+    formula = Column(String(500), nullable=True)
+    sequence = Column(Integer, default=0)
+    is_statutory = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+
+class SalaryStructureComponent(Base):
+    """Effective-dated per-component salary assignment - same close-prior-
+    row pattern as OrgAssignment/CostAllocation, but per component instead
+    of a whole-template switch."""
+
+    __tablename__ = "salary_structure_components"
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    component_id = Column(Integer, ForeignKey("salary_components.id"), nullable=False)
+    amount = Column(Float, nullable=True)
+    percentage = Column(Float, nullable=True)  # for PERCENTAGE_OF_BASIC components
+    formula = Column(String(500), nullable=True)  # per-employee override of the component's default formula
+
+    effective_from = Column(Date, nullable=False)
+    effective_to = Column(Date, nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    component = relationship("SalaryComponent")
+
+
+class SalaryComponentOverride(Base):
+    """One-month override of a recurring SalaryStructureComponent's value
+    (e.g. Group Insurance is normally Rs.50/month but wasn't collected
+    this month - override it to 0 for just this episode+month instead of
+    closing/reopening the effective-dated structure row). When present
+    for (episode_id, component_id, year, month), payroll processing uses
+    `amount` as-is - no proration, no fallback to the structure value."""
+
+    __tablename__ = "salary_component_overrides"
+    __table_args__ = (UniqueConstraint("episode_id", "component_id", "year", "month", name="uq_salary_override_episode_component_period"),)
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    component_id = Column(Integer, ForeignKey("salary_components.id"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    amount = Column(Float, nullable=False)
+    remarks = Column(String(255), nullable=True)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    component = relationship("SalaryComponent")
+    created_by = relationship("User", foreign_keys=[created_by_id])
+
+
+class SalaryTemplate(Base):
+    """Reusable salary structure blueprint (e.g. "Bus Driver - Standard"),
+    scoped to a Cost Center and/or Project, or global when both are null.
+    Loading a template into an employee's structure copies its component
+    rows as a starting point - the loaded values are then freely editable
+    before being applied via set_salary_structure_component, same as any
+    manually-entered structure component."""
+
+    __tablename__ = "salary_templates"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(150), nullable=False)
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=True)  # null = any Cost Center
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)  # null = any Project (within the Cost Center, if set)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    cost_center = relationship("CostCenter")
+    project = relationship("Project")
+    components = relationship("SalaryTemplateComponent", back_populates="template", cascade="all, delete-orphan")
+
+
+class SalaryTemplateComponent(Base):
+    """One line item within a SalaryTemplate - mirrors
+    SalaryStructureComponent's amount/percentage shape but isn't itself
+    effective-dated (the template is a static blueprint; dating only
+    matters once it's applied to a specific employee's structure)."""
+
+    __tablename__ = "salary_template_components"
+    __table_args__ = (UniqueConstraint("template_id", "component_id", name="uq_salary_template_component"),)
+
+    id = Column(Integer, primary_key=True)
+    template_id = Column(Integer, ForeignKey("salary_templates.id"), nullable=False)
+    component_id = Column(Integer, ForeignKey("salary_components.id"), nullable=False)
+    amount = Column(Float, nullable=True)
+    percentage = Column(Float, nullable=True)
+    formula = Column(String(500), nullable=True)
+
+    template = relationship("SalaryTemplate", back_populates="components")
+    component = relationship("SalaryComponent")
+
+
+class StatutoryConfig(Base):
+    """Effective-dated, one active row at a time (mirrors OrgAssignment's
+    "close prior row" pattern) - admin-configurable PF/ESI/EPS rates and
+    wage ceilings, gratuity's statutory constants, and LWF amount/frequency."""
+
+    __tablename__ = "statutory_configs"
+
+    id = Column(Integer, primary_key=True)
+    effective_from = Column(Date, nullable=False)
+    effective_to = Column(Date, nullable=True)
+
+    pf_employee_rate = Column(Float, default=0.12)
+    pf_employer_rate = Column(Float, default=0.12)
+    pf_wage_ceiling = Column(Float, default=15000)
+    eps_rate = Column(Float, default=0.0833)
+    eps_wage_ceiling = Column(Float, default=15000)
+    esi_employee_rate = Column(Float, default=0.0075)
+    esi_employer_rate = Column(Float, default=0.0325)
+    esi_wage_ceiling = Column(Float, default=21000)
+    gratuity_days_per_year = Column(Integer, default=15)
+    gratuity_divisor = Column(Integer, default=26)
+    lwf_employee_amount = Column(Float, default=0)
+    lwf_employer_amount = Column(Float, default=0)
+    lwf_frequency = Column(String(20), default="MONTHLY")  # MONTHLY/HALF_YEARLY/YEARLY
+
+    created_at = Column(DateTime, default=now)
+
+
+class ProfessionalTaxSlab(Base):
+    """State-specific PT slabs - varies by state and changes independently
+    of the other statutory schemes, so HR configures the actual figures
+    for their state(s) rather than the plan guessing them (left unseeded)."""
+
+    __tablename__ = "professional_tax_slabs"
+
+    id = Column(Integer, primary_key=True)
+    state = Column(String(100), nullable=False)
+    min_gross = Column(Float, default=0)
+    max_gross = Column(Float, nullable=True)  # null = no upper bound
+    monthly_amount = Column(Float, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+
+
+class PayrollRun(Base):
+    """One payroll batch per (cost_center, year, month) -
+    DRAFT -> PROCESSED -> APPROVED -> LOCKED. cost_center_id null = all
+    cost centers in one run."""
+
+    __tablename__ = "payroll_runs"
+    __table_args__ = (UniqueConstraint("cost_center_id", "year", "month", name="uq_payroll_run_cc_year_month"),)
+
+    id = Column(Integer, primary_key=True)
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=True)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    status = Column(String(20), default="DRAFT")  # DRAFT/PROCESSED/APPROVED/LOCKED
+    processed_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    processed_at = Column(DateTime, nullable=True)
+    approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    locked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    cost_center = relationship("CostCenter")
+    processed_by = relationship("User", foreign_keys=[processed_by_id])
+    approved_by = relationship("User", foreign_keys=[approved_by_id])
+
+
+class Payslip(Base):
+    """One payslip per (run, episode) - earned days + gross/net summary.
+    Line-item detail lives in PayslipLine; cost-center split in
+    PayslipCostSplit."""
+
+    __tablename__ = "payslips"
+    __table_args__ = (UniqueConstraint("run_id", "episode_id", name="uq_payslip_run_episode"),)
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("payroll_runs.id"), nullable=False)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+
+    present_days = Column(Float, default=0)
+    paid_leave_days = Column(Float, default=0)
+    lop_days = Column(Float, default=0)  # loss of pay / unpaid
+
+    gross_earnings = Column(Float, default=0)
+    gross_deductions = Column(Float, default=0)
+    net_pay = Column(Float, default=0)
+    employer_cost_total = Column(Float, default=0)
+    # ADDITION-type components (bonus, monthly performance/attendance pay
+    # etc.) - added to what's actually paid out, but deliberately kept out
+    # of gross_earnings/net_pay so they never inflate the PF/ESI wage base
+    # (which is computed off gross_earnings). total_payable is the real
+    # disbursed amount: net_pay + additional_pay.
+    additional_pay = Column(Float, default=0)
+    total_payable = Column(Float, default=0)
+
+    generated_at = Column(DateTime, default=now)
+
+    run = relationship("PayrollRun")
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+
+
+class PayslipLine(Base):
+    """One line per salary component on a payslip (earning/deduction/
+    employer contribution amount, snapshotted at generation time)."""
+
+    __tablename__ = "payslip_lines"
+
+    id = Column(Integer, primary_key=True)
+    payslip_id = Column(Integer, ForeignKey("payslips.id"), nullable=False)
+    component_code = Column(String(50), nullable=False)
+    component_name = Column(String(150), nullable=False)
+    component_type = Column(String(30), nullable=False)
+    amount = Column(Float, default=0)
+
+    payslip = relationship("Payslip")
+
+
+class PayslipCostSplit(Base):
+    """Splits a payslip's gross cost across cost-center/project using the
+    episode's active CostAllocation percentages as of that month - no new
+    allocation concept invented, reuses CostAllocation directly."""
+
+    __tablename__ = "payslip_cost_splits"
+
+    id = Column(Integer, primary_key=True)
+    payslip_id = Column(Integer, ForeignKey("payslips.id"), nullable=False)
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    percentage = Column(Float, nullable=False)
+    amount = Column(Float, nullable=False)
+
+    payslip = relationship("Payslip")
+    cost_center = relationship("CostCenter")
+    project = relationship("Project")
+
+
+class AdhocPayEntry(Base):
+    """One-off earning/deduction for a specific (episode, year, month),
+    rolled into that month's Payslip alongside the recurring structure."""
+
+    __tablename__ = "adhoc_pay_entries"
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    label = Column(String(150), nullable=False)
+    amount = Column(Float, nullable=False)
+    is_earning = Column(Boolean, default=True)
+    remarks = Column(String(255), nullable=True)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    created_by = relationship("User", foreign_keys=[created_by_id])
+
+
+class FullFinalSettlement(Base):
+    """Payroll-side Full & Final Settlement, computed at separation - one
+    row per episode. status reuses the existing FullFinalStatus enum's
+    string values (PENDING/IN_PROGRESS/COMPLETED), not redefined here."""
+
+    __tablename__ = "full_final_settlements"
+
+    id = Column(Integer, primary_key=True)
+    episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False, unique=True)
+    separation_id = Column(Integer, ForeignKey("separation_records.id"), nullable=True)
+
+    leave_encashment_days = Column(Float, default=0)
+    leave_encashment_amount = Column(Float, default=0)
+    gratuity_years_of_service = Column(Float, default=0)
+    gratuity_amount = Column(Float, default=0)
+    notice_pay_recovery = Column(Float, default=0)
+    other_dues = Column(Float, default=0)
+    net_payable = Column(Float, default=0)
+    status = Column(String(20), default="PENDING")  # PENDING/IN_PROGRESS/COMPLETED (FullFinalStatus)
+    processed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    episode = relationship("EmploymentEpisode", foreign_keys=[episode_id])
+    separation = relationship("SeparationRecord", foreign_keys=[separation_id])
+
+
+# ---------------------------------------------------------------------------
+# Module 4: Statutory Compliance (blueprint §23)
+# ---------------------------------------------------------------------------
+
+class ComplianceRecord(Base):
+    """Per (scheme, cost_center, year, month) aggregation of that period's
+    PayslipLine amounts for the given scheme - Module 4 aggregates
+    already-computed payroll lines rather than recomputing them."""
+
+    __tablename__ = "compliance_records"
+
+    id = Column(Integer, primary_key=True)
+    scheme = Column(String(20), nullable=False)  # PF/ESI/PT/GRATUITY/LWF
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=True)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+
+    total_employee_contribution = Column(Float, default=0)
+    total_employer_contribution = Column(Float, default=0)
+    employees_covered = Column(Integer, default=0)
+    status = Column(String(20), default="PENDING")  # PENDING/FILED/PAID
+    challan_reference_number = Column(String(100), nullable=True)
+    filed_date = Column(Date, nullable=True)
+    remarks = Column(String(255), nullable=True)
+
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    cost_center = relationship("CostCenter")

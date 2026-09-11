@@ -107,6 +107,7 @@ class EmploymentInfoStep(BaseModel):
     shift_group: str | None = None
     date_of_joining: date | None = None
     confirmation_date: date | None = None
+    application_reference_number: str | None = None
 
     @model_validator(mode="after")
     def _check_dates(self):

@@ -1,10 +1,14 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import GlobalFilterBar from "../components/GlobalFilterBar";
 import {
   Users, LogOut, ChevronsLeft, ChevronsRight, ScrollText, UserCog,
   ShieldCheck, GitBranch, FileEdit, Landmark, Network, Tag, FolderKanban, Tags,
   MapPin, BadgeCheck, IdCard, FileStack, ClipboardList, CarFront,
+  Clock, CalendarDays, ClipboardCheck, CalendarCheck, CalendarClock, CalendarRange, Palmtree,
+  Wallet, Banknote, Settings2, PlayCircle, ReceiptText, PlusCircle, HandCoins,
+  ShieldAlert, FileSpreadsheet,
 } from "lucide-react";
 
 const COLLAPSE_KEY = "hrms_sidebar_collapsed";
@@ -15,6 +19,46 @@ const NAV = [
     section: "Approvals",
     // any(perm) - visible to anyone who can submit (employee.edit) or review (change_requests.review); the page itself scopes rows by role server-side
     items: [{ to: "/change-requests", label: "Change Requests", icon: FileEdit, perm: ["employee.edit", "change_requests.review"] }],
+  },
+  {
+    section: "Attendance",
+    items: [
+      { to: "/shifts", label: "Shifts", icon: Clock, perm: ["roster.manage"] },
+      { to: "/roster", label: "Roster", icon: CalendarRange, perm: ["roster.manage"] },
+      { to: "/attendance-grid", label: "Attendance Grid", icon: CalendarRange, perm: ["attendance.view"] },
+      { to: "/attendance", label: "Attendance Register", icon: CalendarDays, perm: ["attendance.view"] },
+      { to: "/attendance-approvals", label: "Attendance Approvals", icon: ClipboardCheck, perm: ["attendance.approve"] },
+    ],
+  },
+  {
+    section: "Leave",
+    items: [
+      { to: "/leave-types", label: "Leave Types", icon: Palmtree, perm: ["leave.admin"] },
+      { to: "/leave-eligibility", label: "Leave Eligibility", icon: ClipboardList, perm: ["leave.admin"] },
+      { to: "/holiday-calendar", label: "Holiday Calendar", icon: CalendarCheck, perm: ["leave.admin"] },
+      { to: "/leave-applications", label: "Leave Applications", icon: CalendarClock, perm: ["leave.apply"] },
+      { to: "/leave-approvals", label: "Leave Approvals", icon: ClipboardCheck, perm: ["leave.approve"] },
+    ],
+  },
+  {
+    section: "Payroll",
+    items: [
+      { to: "/salary-components", label: "Salary Components", icon: Wallet, perm: ["payroll.process"] },
+      { to: "/salary-templates", label: "Salary Templates", icon: FileStack, perm: ["payroll.process"] },
+      { to: "/salary-structure", label: "Salary Structure", icon: Banknote, perm: ["payroll.process"] },
+      { to: "/statutory-config", label: "Statutory Configuration", icon: Settings2, perm: ["payroll.process"] },
+      { to: "/run-payroll", label: "Run Payroll", icon: PlayCircle, perm: ["payroll.process"] },
+      { to: "/payroll-register", label: "Payroll Register", icon: ReceiptText, perm: ["payroll.view"] },
+      { to: "/adhoc-pay-entries", label: "Ad-hoc Pay Entries", icon: PlusCircle, perm: ["payroll.process"] },
+      { to: "/full-final-settlement", label: "Full & Final Settlement", icon: HandCoins, perm: ["fnf.process"] },
+    ],
+  },
+  {
+    section: "Compliance",
+    items: [
+      { to: "/compliance-overview", label: "Compliance Overview", icon: ShieldAlert, perm: ["compliance.view"] },
+      { to: "/compliance-records", label: "Compliance Records", icon: FileSpreadsheet, perm: ["compliance.view"] },
+    ],
   },
   {
     section: "Organization Setup",
@@ -136,6 +180,7 @@ export default function MainLayout() {
       </aside>
       <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden print:overflow-visible">
         <div className="w-full px-6 py-6 print:p-0">
+          <GlobalFilterBar />
           <Outlet />
         </div>
       </main>

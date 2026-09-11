@@ -1,30 +1,58 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { SlidersHorizontal, X, Upload, Download } from "lucide-react";
+import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, formatDate } from "../components/ui";
+import { useGlobalFilter } from "../context/GlobalFilterContext";
 
 const ALL_COLUMNS = [
-  { key: "employee_number", header: "Employee No.", sortable: true, defaultVisible: true },
+  { key: "employee_number", header: "Employee No.", sortable: true, defaultVisible: true, maxWidth: 140 },
   {
-    key: "name", header: "Name", sortable: true, defaultVisible: true,
+    key: "name", header: "Name", sortable: true, defaultVisible: true, noTruncate: true,
     sortAccessor: (r) => `${r.last_name} ${r.first_name}`,
     render: (r) => `${r.first_name} ${r.last_name}`,
   },
-  { key: "designation", header: "Designation", sortable: true, defaultVisible: true, render: (r) => r.designation || "—" },
-  { key: "cost_center", header: "Cost Center", sortable: true, defaultVisible: true, render: (r) => r.cost_center || "—" },
-  { key: "department", header: "Department", sortable: true, defaultVisible: true, render: (r) => r.department || "—" },
-  { key: "status", header: "Status", sortable: true, defaultVisible: true, render: (r) => <StatusBadge status={r.status} /> },
-  { key: "employment_type", header: "Employment Type", sortable: true, defaultVisible: false, render: (r) => r.employment_type || "—" },
-  { key: "employee_category", header: "Category", sortable: true, defaultVisible: false, render: (r) => r.employee_category || "—" },
-  { key: "date_of_joining", header: "Date of Joining", sortable: true, defaultVisible: false, render: (r) => formatDate(r.date_of_joining) },
-  { key: "work_location", header: "Work Location", sortable: true, defaultVisible: false, render: (r) => r.work_location || "—" },
-  { key: "gender", header: "Gender", sortable: true, defaultVisible: false, render: (r) => r.gender || "—" },
-  { key: "mobile_number", header: "Mobile", sortable: true, defaultVisible: false, render: (r) => r.mobile_number || "—" },
-  { key: "official_email", header: "Official Email", sortable: true, defaultVisible: false, render: (r) => r.official_email || "—" },
+  { key: "designation", header: "Designation", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.designation || "—" },
+  { key: "cost_center", header: "Cost Center", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.cost_center || "—" },
+  { key: "department", header: "Department", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.department || "—" },
+  { key: "status", header: "Status", sortable: true, defaultVisible: true, maxWidth: 140, render: (r) => <StatusBadge status={r.status} /> },
+  { key: "employment_type", header: "Employment Type", sortable: true, defaultVisible: false, maxWidth: 150, render: (r) => r.employment_type || "—" },
+  { key: "employee_category", header: "Category", sortable: true, defaultVisible: false, maxWidth: 130, render: (r) => r.employee_category || "—" },
+  { key: "date_of_joining", header: "Date of Joining", sortable: true, defaultVisible: false, maxWidth: 130, tooltip: (r) => formatDate(r.date_of_joining), render: (r) => formatDate(r.date_of_joining) },
+  { key: "work_location", header: "Work Location", sortable: true, defaultVisible: false, maxWidth: 170, render: (r) => r.work_location || "—" },
+  { key: "gender", header: "Gender", sortable: true, defaultVisible: false, maxWidth: 100, render: (r) => r.gender || "—" },
+  { key: "mobile_number", header: "Mobile", sortable: true, defaultVisible: false, maxWidth: 130, render: (r) => r.mobile_number || "—" },
+  { key: "official_email", header: "Official Email", sortable: true, defaultVisible: false, maxWidth: 200, render: (r) => r.official_email || "—" },
 ];
 
 const STATUS_OPTIONS = ["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "SUSPENDED", "NOTICE_PERIOD", "SEPARATED"];
+
+// Always-visible actions column - appended after the user-configurable
+// ALL_COLUMNS set, never part of the visible-columns picker (mirrors
+// AttendanceRegister.jsx's summary view "_actions" column pattern).
+function makeActionsColumn(navigate, onDelete) {
+  return {
+    key: "_actions", header: "", align: "right", width: "8%",
+    render: (r) => (
+      <div className="flex gap-1.5 justify-end">
+        <Button
+          size="sm" variant="outline" className="!p-1.5" title="Edit" aria-label="Edit"
+          onClick={(e) => { e.stopPropagation(); navigate(`/employees/${r.episode_id}/wizard`); }}
+        >
+          <Pencil size={14} />
+        </Button>
+        {r.status === "DRAFT" && (
+          <Button
+            size="sm" variant="outline" className="!p-1.5" title="Delete" aria-label="Delete"
+            onClick={(e) => { e.stopPropagation(); onDelete(r); }}
+          >
+            <Trash2 size={14} className="text-danger" />
+          </Button>
+        )}
+      </div>
+    ),
+  };
+}
 
 const VISIBLE_COLUMNS_KEY = "hrms_employees_visible_columns";
 
@@ -44,6 +72,7 @@ function uniqueValues(rows, key) {
 
 export default function Employees() {
   const navigate = useNavigate();
+  const { year, month, costCenterId } = useGlobalFilter();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -65,10 +94,12 @@ export default function Employees() {
 
   function reload() {
     setLoading(true);
-    client.get("/employees").then((res) => setRows(res.data)).finally(() => setLoading(false));
+    const params = { year, month };
+    if (costCenterId) params.cost_center_id = costCenterId;
+    client.get("/employees", { params }).then((res) => setRows(res.data)).finally(() => setLoading(false));
   }
 
-  useEffect(reload, []);
+  useEffect(reload, [year, month, costCenterId]);
 
   useEffect(() => {
     localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify([...visibleColumns]));
@@ -113,6 +144,17 @@ export default function Employees() {
       setBulkError(apiErrorMessage(err));
     } finally {
       setBulkUploading(false);
+    }
+  }
+
+  async function deleteEmployee(row) {
+    if (!window.confirm(`Delete draft employee "${row.first_name} ${row.last_name}"? This cannot be undone.`)) return;
+    setError("");
+    try {
+      await client.delete(`/employees/${row.episode_id}`);
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
     }
   }
 
@@ -165,7 +207,7 @@ export default function Employees() {
     });
   }, [rows, search, statusFilter, costCenterFilter, departmentFilter, employmentTypeFilter, categoryFilter]);
 
-  const columns = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
+  const columns = [...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)), makeActionsColumn(navigate, deleteEmployee)];
   const filtersActive = search || statusFilter || costCenterFilter || departmentFilter || employmentTypeFilter || categoryFilter;
 
   return (
@@ -265,7 +307,8 @@ export default function Employees() {
             rows={filteredRows}
             keyField="episode_id"
             empty={rows.length === 0 ? "No employees yet." : "No employees match the current filters."}
-            onRowClick={(r) => navigate(r.status === "DRAFT" ? `/employees/${r.episode_id}/wizard` : `/employees/${r.episode_id}`)}
+            onRowClick={(r) => navigate(`/employees/${r.episode_id}`)}
+            singleLine
           />
         )}
       </Card>
@@ -288,7 +331,9 @@ export default function Employees() {
 
             {bulkResult && (
               <div className="mb-4 text-sm">
-                <div className="text-ok font-medium mb-1">{bulkResult.created} employee{bulkResult.created === 1 ? "" : "s"} created as Draft.</div>
+                <div className="text-ok font-medium mb-1">
+                  {bulkResult.created} created, {bulkResult.updated || 0} updated, {bulkResult.submitted_for_approval || 0} submitted for approval.
+                </div>
                 {bulkResult.errors.length > 0 && (
                   <div className="border border-danger/20 bg-danger/5 rounded-md p-2 max-h-40 overflow-y-auto">
                     <div className="text-xs font-medium text-danger mb-1">{bulkResult.errors.length} row(s) skipped:</div>

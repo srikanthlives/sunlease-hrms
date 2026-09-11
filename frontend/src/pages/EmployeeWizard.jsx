@@ -553,6 +553,7 @@ export default function EmployeeWizard() {
             <Input label="Shift Group" value={employment.shift_group || ""} onChange={(e) => setEmployment({ ...employment, shift_group: e.target.value })} />
             <Input label="Date of Joining" type="date" value={employment.date_of_joining || ""} onChange={(e) => setEmployment({ ...employment, date_of_joining: e.target.value })} />
             <Input label="Confirmation Date" type="date" value={employment.confirmation_date || ""} onChange={(e) => setEmployment({ ...employment, confirmation_date: e.target.value })} />
+            <Input label="Application Reference Number" value={employment.application_reference_number || ""} onChange={(e) => setEmployment({ ...employment, application_reference_number: e.target.value })} />
           </div>
         )}
 
@@ -1009,6 +1010,7 @@ export default function EmployeeWizard() {
               <Field label="Shift Group" value={employment.shift_group} />
               <Field label="Date of Joining" value={formatDate(employment.date_of_joining)} />
               <Field label="Confirmation Date" value={formatDate(employment.confirmation_date)} />
+              <Field label="Application Reference Number" value={employment.application_reference_number} />
             </div>
 
             <SectionDivider>Organizational Assignment</SectionDivider>

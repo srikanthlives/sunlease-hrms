@@ -1,8 +1,8 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models.models import OrgAssignment, CostAllocation, Nominee
+from app.models.models import OrgAssignment, CostAllocation, Nominee, EmploymentEpisode
 
 
 def add_org_assignment(db: Session, episode_id: int, data: dict) -> OrgAssignment:
@@ -37,6 +37,25 @@ def active_allocation_total(db: Session, episode_id: int) -> float:
         .all()
     )
     return sum(r.percentage for r in rows)
+
+
+def episodes_in_cost_center_during(db: Session, cost_center_id: int | None, start_date: date, end_date: date) -> list[EmploymentEpisode]:
+    """Episodes with an OrgAssignment (in cost_center_id, if given - else
+    across ALL cost centers) overlapping [start_date, end_date]. Used to
+    answer "who was in Cost Center X during month Y" for the app-level
+    Month+Cost Center filter (Employees/Attendance/Leave list scoping).
+    Returns distinct EmploymentEpisode objects (an episode could in theory
+    have been reassigned within the window - only counted once)."""
+    query = db.query(OrgAssignment.episode_id).filter(
+        OrgAssignment.effective_from <= end_date,
+        (OrgAssignment.effective_to.is_(None)) | (OrgAssignment.effective_to >= start_date),
+    )
+    if cost_center_id is not None:
+        query = query.filter(OrgAssignment.cost_center_id == cost_center_id)
+    episode_ids = {row[0] for row in query.distinct().all()}
+    if not episode_ids:
+        return []
+    return db.query(EmploymentEpisode).filter(EmploymentEpisode.id.in_(episode_ids)).all()
 
 
 def nominee_total(db: Session, episode_id: int, nomination_type: str | None) -> float:

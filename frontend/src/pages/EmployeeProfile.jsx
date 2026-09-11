@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, StatusBadge, SectionDivider, formatDate, formatDateTime } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
+import EmployeeReviewSummary from "../components/EmployeeReviewSummary";
+import DocumentPreviewModal from "../components/DocumentPreviewModal";
 
 const TABS = [
   "Overview", "Personal", "Employment", "Organization", "Statutory",
@@ -28,6 +30,7 @@ export default function EmployeeProfile() {
   const [checklist, setChecklist] = useState({});
   const [sepBusy, setSepBusy] = useState(false);
   const [banner, setBanner] = useState("");
+  const [previewDoc, setPreviewDoc] = useState(null);
 
   function reload() {
     client.get(`/employees/${episodeId}`).then((res) => {
@@ -219,14 +222,7 @@ export default function EmployeeProfile() {
 
       <Card>
         {tab === "Overview" && (
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <Field label="Employee Number" value={episode.employee_number} />
-            <Field label="Status" value={<StatusBadge status={episode.status} />} />
-            <Field label="Designation" value={episode.designation} />
-            <Field label="Date of Joining" value={formatDate(episode.date_of_joining)} />
-            <Field label="Mobile" value={employee.mobile_number} />
-            <Field label="Official Email" value={employee.official_email} />
-          </div>
+          <EmployeeReviewSummary detail={detail} onPreviewDocument={(doc) => setPreviewDoc(doc)} />
         )}
 
         {tab === "Personal" && (
@@ -291,6 +287,7 @@ export default function EmployeeProfile() {
             <Field label="Shift Group" value={episode.shift_group} />
             <Field label="Date of Joining" value={formatDate(episode.date_of_joining)} />
             <Field label="Confirmation Date" value={formatDate(episode.confirmation_date)} />
+            <Field label="Application Reference Number" value={episode.application_reference_number} />
             <Field label="Separation Date" value={formatDate(episode.separation_date)} />
             <Field label="Separation Reason" value={episode.separation_reason} />
           </div>
@@ -387,7 +384,11 @@ export default function EmployeeProfile() {
               <p className="text-sm text-ink/40 py-6 text-center">No document requirements configured for this employee's Type/Category/Designation.</p>
             )}
             {requiredDocs.map((d) => (
-              <div key={d.document_type_id} className="border border-ink/10 rounded-md p-3 flex items-center justify-between gap-4">
+              <div
+                key={d.document_type_id}
+                className={`border border-ink/10 rounded-md p-3 flex items-center justify-between gap-4 ${d.uploaded ? "cursor-pointer hover:bg-brand-50" : ""}`}
+                onClick={() => d.uploaded && setPreviewDoc({ id: d.document_meta_id, file_name: d.file_name, document_type: d.document_type_name })}
+              >
                 <div>
                   <div className="text-sm font-medium text-ink flex items-center gap-2">
                     {d.document_type_name}
@@ -406,14 +407,14 @@ export default function EmployeeProfile() {
                 <div className="flex items-center gap-2">
                   {d.uploaded && (
                     <>
-                      <Button variant="outline" size="sm" onClick={() => downloadDocument(d.document_meta_id, d.file_name)}>Download</Button>
+                      <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); downloadDocument(d.document_meta_id, d.file_name); }}>Download</Button>
                       {can("employee.documents.upload") && (
-                        <Button variant="danger" size="sm" onClick={() => removeDocument(d.document_meta_id)}>Remove</Button>
+                        <Button variant="danger" size="sm" onClick={(e) => { e.stopPropagation(); removeDocument(d.document_meta_id); }}>Remove</Button>
                       )}
                     </>
                   )}
                   {can("employee.documents.upload") && (
-                    <label className="text-xs">
+                    <label className="text-xs" onClick={(e) => e.stopPropagation()}>
                       <span className={`inline-block px-3 py-1.5 rounded-md border border-ink/15 cursor-pointer hover:bg-ink/5 ${docUploadingId === d.document_type_id ? "opacity-50 pointer-events-none" : ""}`}>
                         {docUploadingId === d.document_type_id ? "Uploading…" : d.uploaded ? "Replace" : "Upload"}
                       </span>
@@ -588,6 +589,10 @@ export default function EmployeeProfile() {
           </div>
         )}
       </Card>
+
+      {previewDoc && (
+        <DocumentPreviewModal episodeId={episodeId} document={previewDoc} onClose={() => setPreviewDoc(null)} />
+      )}
     </div>
   );
 }

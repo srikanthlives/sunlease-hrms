@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { GlobalFilterProvider } from "./context/GlobalFilterContext";
 import MainLayout from "./layouts/MainLayout";
 import Login from "./pages/Login";
 import Employees from "./pages/Employees";
@@ -21,6 +22,26 @@ import ApprovalRules from "./pages/ApprovalRules";
 import DocumentRequirementsConfig from "./pages/DocumentRequirementsConfig";
 import DrivingLicenceRequirementsConfig from "./pages/DrivingLicenceRequirementsConfig";
 import ChangeRequests from "./pages/ChangeRequests";
+import Shifts from "./pages/Shifts";
+import Roster from "./pages/Roster";
+import AttendanceRegister from "./pages/AttendanceRegister";
+import AttendanceGrid from "./pages/AttendanceGrid";
+import AttendanceApprovals from "./pages/AttendanceApprovals";
+import LeaveTypesConfig from "./pages/LeaveTypesConfig";
+import LeaveEligibilityConfig from "./pages/LeaveEligibilityConfig";
+import HolidayCalendar from "./pages/HolidayCalendar";
+import LeaveApplications from "./pages/LeaveApplications";
+import LeaveApprovals from "./pages/LeaveApprovals";
+import SalaryComponents from "./pages/SalaryComponents";
+import SalaryTemplates from "./pages/SalaryTemplates";
+import SalaryStructure from "./pages/SalaryStructure";
+import StatutoryConfigPage from "./pages/StatutoryConfigPage";
+import RunPayroll from "./pages/RunPayroll";
+import PayrollRegister from "./pages/PayrollRegister";
+import AdhocPayEntries from "./pages/AdhocPayEntries";
+import FullFinalSettlement from "./pages/FullFinalSettlement";
+import ComplianceOverview from "./pages/ComplianceOverview";
+import ComplianceRecords from "./pages/ComplianceRecords";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -39,7 +60,9 @@ export default function App() {
             path="/"
             element={
               <ProtectedRoute>
-                <MainLayout />
+                <GlobalFilterProvider>
+                  <MainLayout />
+                </GlobalFilterProvider>
               </ProtectedRoute>
             }
           >
@@ -58,6 +81,26 @@ export default function App() {
             <Route path="organization/employee-types" element={<EmployeeTypesMaster />} />
             <Route path="organization/document-types" element={<DocumentTypesMaster />} />
             <Route path="change-requests" element={<ChangeRequests />} />
+            <Route path="shifts" element={<Shifts />} />
+            <Route path="roster" element={<Roster />} />
+            <Route path="attendance" element={<AttendanceRegister />} />
+            <Route path="attendance-grid" element={<AttendanceGrid />} />
+            <Route path="attendance-approvals" element={<AttendanceApprovals />} />
+            <Route path="leave-types" element={<LeaveTypesConfig />} />
+            <Route path="leave-eligibility" element={<LeaveEligibilityConfig />} />
+            <Route path="holiday-calendar" element={<HolidayCalendar />} />
+            <Route path="leave-applications" element={<LeaveApplications />} />
+            <Route path="leave-approvals" element={<LeaveApprovals />} />
+            <Route path="salary-components" element={<SalaryComponents />} />
+            <Route path="salary-templates" element={<SalaryTemplates />} />
+            <Route path="salary-structure" element={<SalaryStructure />} />
+            <Route path="statutory-config" element={<StatutoryConfigPage />} />
+            <Route path="run-payroll" element={<RunPayroll />} />
+            <Route path="payroll-register" element={<PayrollRegister />} />
+            <Route path="adhoc-pay-entries" element={<AdhocPayEntries />} />
+            <Route path="full-final-settlement" element={<FullFinalSettlement />} />
+            <Route path="compliance-overview" element={<ComplianceOverview />} />
+            <Route path="compliance-records" element={<ComplianceRecords />} />
             <Route path="admin/users" element={<UsersAdmin />} />
             <Route path="admin/roles-permissions" element={<RolesPermissions />} />
             <Route path="admin/approval-rules" element={<ApprovalRules />} />

@@ -1,9 +1,10 @@
+import calendar
 import io
 import json
 import os
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
@@ -105,6 +106,44 @@ def create_draft(db: Session = Depends(get_db), user: User = Depends(get_current
     return {"employee_id": employee.id, "episode_id": episode.id}
 
 
+@router.delete("/{episode_id}", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
+def delete_draft(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Hard-deletes a DRAFT employee started by mistake - nothing has been
+    approved yet so there's genuinely nothing to lose (unlike master data,
+    which is deactivated, never deleted). 400 for any non-DRAFT episode.
+    Cascades through every episode-scoped child table a draft could
+    plausibly have populated, then the episode, then the parent Employee
+    row (+ its Address rows) only if this was that Employee's only episode."""
+    episode = _get_episode(db, episode_id)
+    if episode.status != EpisodeStatus.DRAFT:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only DRAFT employees can be deleted")
+
+    audit_service.record(db, "EMPLOYEE_DRAFT", episode.id, AuditAction.UPDATE, user, old_value=f"deleted employee_number={episode.employee_number}")
+
+    for document in db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).all():
+        try:
+            path = document_service.resolve_file_path(document)
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).delete(synchronize_session=False)
+
+    for model in (OrgAssignment, CostAllocation, StatutoryInfo, BankAccount, Dependent, Nominee, DrivingLicenceDetail):
+        db.query(model).filter(model.episode_id == episode.id).delete(synchronize_session=False)
+
+    employee_id = episode.employee_id
+    db.query(EmploymentEpisode).filter(EmploymentEpisode.id == episode.id).delete(synchronize_session=False)
+
+    remaining = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == employee_id).count()
+    if remaining == 0:
+        db.query(Address).filter(Address.employee_id == employee_id).delete(synchronize_session=False)
+        db.query(Employee).filter(Employee.id == employee_id).delete(synchronize_session=False)
+
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("-bulk-upload-template", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
 def download_bulk_upload_template(db: Session = Depends(get_db)):
     """Downloadable .xlsx: header row (all supported fields) + one filled
@@ -137,8 +176,14 @@ def bulk_upload_employees(file: UploadFile = File(...), db: Session = Depends(ge
 
 
 @router.get("", dependencies=[Depends(require_permission(Permission.EMPLOYEE_VIEW))])
-def list_employees(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    episodes = (
+def list_employees(
+    cost_center_id: int | None = Query(None),
+    year: int | None = Query(None),
+    month: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    query = (
         db.query(EmploymentEpisode)
         .options(
             joinedload(EmploymentEpisode.employee),
@@ -148,8 +193,22 @@ def list_employees(db: Session = Depends(get_db), user: User = Depends(get_curre
             joinedload(EmploymentEpisode.work_location),
         )
         .order_by(EmploymentEpisode.id.desc())
-        .all()
     )
+
+    # year+month given: scope to episodes that had an OrgAssignment
+    # overlapping that month (optionally restricted to cost_center_id).
+    # Otherwise (params omitted): unchanged Phase 1 behavior - all episodes,
+    # cost_center/department shown from whatever assignment is CURRENTLY open.
+    allowed_episode_ids = None
+    if year is not None and month is not None:
+        _, last_day = calendar.monthrange(year, month)
+        month_start, month_end = date(year, month, 1), date(year, month, last_day)
+        allowed_episode_ids = {
+            ep.id for ep in employee_service.episodes_in_cost_center_during(db, cost_center_id, month_start, month_end)
+        }
+        query = query.filter(EmploymentEpisode.id.in_(allowed_episode_ids)) if allowed_episode_ids else query.filter(False)
+
+    episodes = query.all()
 
     # Bulk-fetch the currently-open assignment per episode (and the Cost
     # Center/Department names it points at) instead of one query per row.
@@ -163,6 +222,11 @@ def list_employees(db: Session = Depends(get_db), user: User = Depends(get_curre
         assignment = assignment_by_episode.get(e.id)
         cc_id = assignment.cost_center_id if assignment else None
         if not permission_service.can_see_cost_center(db, user, cc_id):
+            continue
+        # When a plain cost_center_id filter is given without year/month,
+        # fall back to filtering on the currently-open assignment (no
+        # overlap window to resolve against).
+        if cost_center_id is not None and year is None and month is None and cc_id != cost_center_id:
             continue
         rows.append({
             "episode_id": e.id,
@@ -204,6 +268,7 @@ def get_employee(episode_id: int, db: Session = Depends(get_db), user: User = De
             "shift_group": episode.shift_group,
             "date_of_joining": episode.date_of_joining,
             "confirmation_date": episode.confirmation_date,
+            "application_reference_number": episode.application_reference_number,
             "status": episode.status,
             "separation_date": episode.separation_date,
             "separation_reason": episode.separation_reason,
@@ -493,6 +558,22 @@ def download_document(episode_id: int, document_id: int, db: Session = Depends(g
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     path = document_service.resolve_file_path(document)
     return FileResponse(path, filename=document.file_name, media_type=document.mime_type)
+
+
+@router.get("/{episode_id}/documents/{document_id}/preview", dependencies=[Depends(require_permission(Permission.EMPLOYEE_DOCUMENTS_VIEW))])
+def preview_document(episode_id: int, document_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Same file as /download but WITHOUT the `filename` kwarg to
+    FileResponse - Starlette only sets Content-Disposition: attachment
+    when a filename is given, so omitting it (mirrors the photo endpoint's
+    plain FileResponse(path) pattern above) lets the browser render the
+    file inline (e.g. in an <iframe>/<img>) instead of force-downloading."""
+    episode = _get_episode(db, episode_id)
+    _check_scope(db, user, episode)
+    document = db.query(DocumentMeta).filter(DocumentMeta.id == document_id, DocumentMeta.episode_id == episode.id).first()
+    if not document:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    path = document_service.resolve_file_path(document)
+    return FileResponse(path, media_type=document.mime_type)
 
 
 @router.delete("/{episode_id}/documents/{document_id}", dependencies=[Depends(require_permission(Permission.EMPLOYEE_DOCUMENTS_UPLOAD))])
