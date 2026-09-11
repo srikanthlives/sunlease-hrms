@@ -35,10 +35,10 @@ frontend/build/
 
 # Database
 *.db
+hrms.db
 
 # Uploads and data directory
-/data/uploads/
-/data/*.db
+/data
 
 # Environment variables
 .env
