@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.db.session import Base, engine
 from app.models import __init__ as _models  # noqa: F401  (ensures models are registered)
 from app.migrate import migrate
-from app.routers import auth, masters, employees, attendance, leave, payroll, compliance
+from app.routers import auth, masters, employees, attendance, leave, payroll, compliance, admin
 
 try:
     print("[STARTUP] Running database migration...")
@@ -40,6 +40,7 @@ app.include_router(attendance.router)
 app.include_router(leave.router)
 app.include_router(payroll.router)
 app.include_router(compliance.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/v1/health")

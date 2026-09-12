@@ -102,6 +102,25 @@ design.
   strips Aadhaar/PAN/bank account number+IFSC/statutory numbers from
   `GET /employees/{id}` responses unless the caller has
   `employee.sensitive.view`.
+- **SUPER_ADMIN** — a 5th role, added later, exclusively for the database
+  backup/restore tools (`routers/admin.py`, `GET /admin/db-backup`,
+  `POST /admin/db-restore`, gated by `core/deps.py::require_super_admin`
+  — a strictly narrower gate than `require_hr_admin`, so **HR_ADMIN
+  itself cannot reach these two routes**). Everywhere else, SUPER_ADMIN
+  is a superset of HR_ADMIN — every `role.name == RoleName.HR_ADMIN`
+  bypass check in the codebase (`require_permission`, `permission_service`,
+  `approval_service.authorize_approval`, the bulk-import upsert branch,
+  `_save_or_request`, etc.) checks `in (RoleName.HR_ADMIN,
+  RoleName.SUPER_ADMIN)` instead of a single equality, so grep for that
+  tuple (not a lone `== RoleName.HR_ADMIN`) if adding a new admin-bypass
+  check. Frontend: `MainLayout.jsx`'s nav-visibility `roles`/`perm`
+  checks and `UsersAdmin.jsx`'s `isSuperAdmin` gate mirror this. Seeded as
+  `superadmin`/`SuperAdmin@123`. Mirrors sunlease-expms's identical
+  SUPER_ADMIN role and db-backup/restore feature (same hot-swap
+  mechanism: validate the upload on a throwaway temp-file copy via
+  `PRAGMA integrity_check`, timestamp-backup the current file, `engine.dispose()`
+  then atomically `shutil.move` the new file in, re-run `migrate()` —  no
+  app restart needed).
 
 ## Approval routing + Change Requests (v2 — blueprint §15)
 
@@ -369,6 +388,12 @@ active `StatutoryConfig` row at the seeded PF/ESI rates.
 `ProfessionalTaxSlab` is deliberately left empty (state-specific — admin
 fills in for their actual state rather than the seed guessing wrong
 numbers).
+
+All of the above only happens in the default `HRMS_SEED_MODE=full`. Set
+`HRMS_SEED_MODE=minimal` for a real production seed — only the 5 Role
+rows + their `Permission.DEFAULTS` grants + `admin`/`superadmin` get
+created, nothing else; HR Admin builds the org structure, master data,
+and any additional users through the app itself.
 
 ## What's left
 

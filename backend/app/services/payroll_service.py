@@ -846,7 +846,7 @@ def approve_payroll_run(db: Session, run_id: int, user: User) -> PayrollRun:
     if run.status != "PROCESSED":
         raise ValueError("Only a PROCESSED payroll run can be approved")
 
-    if user.role.name != RoleName.HR_ADMIN:
+    if user.role.name not in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
         rule = approval_service.find_approval_rule(db, TransactionType.PAYROLL_PROCESSING, run.cost_center_id, None)
         if rule:
             if rule.approver_user_id is not None:

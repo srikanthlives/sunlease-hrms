@@ -13,7 +13,14 @@ def hash_password(password: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
+        # A malformed/foreign-format hash (e.g. a hash produced by a
+        # different algorithm, or a blank hashed_password) raises here
+        # rather than just returning False - previously swallowed
+        # silently, which made a bad-hash-in-the-DB case indistinguishable
+        # from a genuinely wrong password in the logs. See
+        # routers/auth.py::login for where this gets logged with context.
+        print(f"[AUTH] verify_password raised {type(exc).__name__}: {exc}", flush=True)
         return False
 
 

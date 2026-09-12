@@ -248,7 +248,7 @@ def _apply_or_request(db: Session, episode: EmploymentEpisode, transaction_type:
     to do)."""
     if not changes:
         return None
-    if actor.role.name == RoleName.HR_ADMIN or episode.status != EpisodeStatus.ACTIVE:
+    if actor.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN) or episode.status != EpisodeStatus.ACTIVE:
         approval_service.apply_changes(db, episode, transaction_type, changes)
         audit_service.record(db, transaction_type, episode.id, AuditAction.UPDATE, actor, new_value="bulk upload")
         return True

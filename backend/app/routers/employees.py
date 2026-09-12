@@ -78,7 +78,7 @@ def _save_or_request(db: Session, episode: EmploymentEpisode, transaction_type: 
     episode isn't ACTIVE yet), otherwise creates a ChangeRequest instead -
     same branching sunlease-expms uses for direct-edit vs edit-request,
     see services/approval_service.py."""
-    if user.role.name == RoleName.HR_ADMIN or episode.status != EpisodeStatus.ACTIVE:
+    if user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN) or episode.status != EpisodeStatus.ACTIVE:
         approval_service.apply_changes(db, episode, transaction_type, changes)
         audit_service.record(db, transaction_type, episode.id, AuditAction.UPDATE, user)
         db.commit()
@@ -536,7 +536,7 @@ def upload_document(
     # approval - same HR_ADMIN/non-ACTIVE bypass as _save_or_request. The
     # new file is staged on disk but the old document stays live until
     # the change request is approved (approval_service.review_change_request).
-    if existing and user.role.name != RoleName.HR_ADMIN and episode.status == EpisodeStatus.ACTIVE:
+    if existing and user.role.name not in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN) and episode.status == EpisodeStatus.ACTIVE:
         staged = document_service.stage_replacement(db, episode, document_type_id, file)
         request = approval_service.create_document_change_request(db, episode, existing, staged, user)
         db.commit()
@@ -782,7 +782,7 @@ def cancel_separation(episode_id: int, db: Session = Depends(get_db), user: User
 @router.get("-change-requests")
 def list_change_requests(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(ChangeRequest).order_by(ChangeRequest.created_at.desc())
-    if user.role.name != RoleName.HR_ADMIN and not permission_service.has_permission(db, user, Permission.CHANGE_REQUESTS_REVIEW):
+    if user.role.name not in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN) and not permission_service.has_permission(db, user, Permission.CHANGE_REQUESTS_REVIEW):
         query = query.filter(ChangeRequest.requested_by_id == user.id)
     rows = query.all()
     return [
@@ -806,7 +806,7 @@ def preview_document_change(request_id: int, which: str, db: Session = Depends(g
     if not request or request.transaction_type != TransactionType.DOCUMENT_CHANGE:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not a document change request")
     if not (
-        user.role.name == RoleName.HR_ADMIN
+        user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN)
         or permission_service.has_permission(db, user, Permission.CHANGE_REQUESTS_REVIEW)
         or request.requested_by_id == user.id
     ):

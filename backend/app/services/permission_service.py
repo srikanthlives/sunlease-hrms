@@ -14,7 +14,7 @@ SENSITIVE_LICENCE_FIELDS = {"licence_number", "badge_number"}
 
 
 def has_permission(db: Session, user: User, code: str) -> bool:
-    if user.role.name == RoleName.HR_ADMIN:
+    if user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
         return True
     grant = (
         db.query(RolePermission)
@@ -31,7 +31,7 @@ def role_permission_grants(db: Session, role_id: int) -> list[RolePermission]:
 def user_cost_center_ids(db: Session, user: User) -> list[int] | None:
     """None means unrestricted (HR_ADMIN). Otherwise the list of Cost
     Center ids this user may see/act on - empty list means none."""
-    if user.role.name == RoleName.HR_ADMIN:
+    if user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
         return None
     rows = db.query(UserCostCenterScope.cost_center_id).filter(UserCostCenterScope.user_id == user.id).all()
     return [r[0] for r in rows]

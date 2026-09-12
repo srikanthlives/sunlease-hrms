@@ -118,6 +118,16 @@ python -m app.seed          # creates ../data/hrms.db, roles, and a sample org s
 uvicorn app.main:app --reload --port 8010
 ```
 
+For a **production** deployment, seed with `HRMS_SEED_MODE=minimal` instead —
+this creates only the 5 role definitions (HR_STAFF/APPROVER/EMPLOYEE stay
+assignable to real users later) plus the two admin logins below, with **no**
+sample org structure, master data, or hrstaff/approver test users. HR Admin
+creates everything else through the app itself:
+
+```bash
+HRMS_SEED_MODE=minimal python -m app.seed
+```
+
 The API is now at `http://localhost:8010`, with interactive docs at
 `http://localhost:8010/docs`.
 
@@ -128,6 +138,12 @@ Seeded logins:
 | HR Admin | `admin` | `Admin@123` |
 | HR Staff | `hrstaff` | `HrStaff@123` |
 | Approver | `approver` | `Approver@123` |
+| Super Admin | `superadmin` | `SuperAdmin@123` |
+
+Super Admin is a superset of HR Admin everywhere HR Admin is allowed,
+plus exclusive access to Database Backup & Restore (Users & Roles page)
+— downloading/replacing the live SQLite database, which even HR Admin
+itself cannot do.
 
 HR Admin bypasses all permission/scope checks. HR Staff and Approver are
 both scoped to the seeded Cost Center so the RBAC and approval-routing

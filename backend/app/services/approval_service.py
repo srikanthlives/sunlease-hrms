@@ -51,7 +51,7 @@ def find_approval_rule(db: Session, transaction_type: str, cost_center_id: int |
 
 
 def authorize_approval(db: Session, user: User, episode: EmploymentEpisode, transaction_type: str) -> None:
-    if user.role.name == RoleName.HR_ADMIN:
+    if user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
         return
     cost_center_id = current_cost_center_id(db, episode.id)
     rule = find_approval_rule(db, transaction_type, cost_center_id, episode.employee_category_id)

@@ -77,7 +77,7 @@ const NAV = [
   },
   {
     section: "Administration",
-    roles: ["HR_ADMIN"],
+    roles: ["HR_ADMIN", "SUPER_ADMIN"],
     items: [
       { to: "/admin/users", label: "Users & Roles", icon: UserCog },
       { to: "/admin/roles-permissions", label: "Roles & Permissions", icon: ShieldCheck },
@@ -96,7 +96,7 @@ export default function MainLayout() {
 
   function visible(entry) {
     if (entry.roles && !entry.roles.includes(user?.role)) return false;
-    if (entry.perm && user?.role !== "HR_ADMIN" && !entry.perm.some((p) => can(p))) return false;
+    if (entry.perm && user?.role !== "HR_ADMIN" && user?.role !== "SUPER_ADMIN" && !entry.perm.some((p) => can(p))) return false;
     return true;
   }
 

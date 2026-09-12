@@ -43,11 +43,15 @@ def require_roles(*role_names: str):
 # Convenience shorthands used across routers. HR_ADMIN is a superset of
 # every other role for Module 1 (Phase 1 has no granular field-level RBAC
 # yet - see blueprint §18/§22 - so these are the coarse role gates until
-# that's built out).
-require_hr_admin = require_roles("HR_ADMIN")
-require_hr_staff = require_roles("HR_ADMIN", "HR_STAFF")
-require_approver = require_roles("HR_ADMIN", "APPROVER")
-require_any = require_roles("HR_ADMIN", "HR_STAFF", "APPROVER", "EMPLOYEE")
+# that's built out). SUPER_ADMIN is a superset of HR_ADMIN everywhere
+# HR_ADMIN is allowed (included in every one of these shorthands below),
+# but has its own exclusive gate (require_super_admin) for the database
+# backup/restore tools that HR_ADMIN itself cannot reach.
+require_hr_admin = require_roles("HR_ADMIN", "SUPER_ADMIN")
+require_hr_staff = require_roles("HR_ADMIN", "HR_STAFF", "SUPER_ADMIN")
+require_approver = require_roles("HR_ADMIN", "APPROVER", "SUPER_ADMIN")
+require_any = require_roles("HR_ADMIN", "HR_STAFF", "APPROVER", "EMPLOYEE", "SUPER_ADMIN")
+require_super_admin = require_roles("SUPER_ADMIN")
 
 
 def require_permission(code: str):
@@ -57,7 +61,7 @@ def require_permission(code: str):
     def checker(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
         from app.services.permission_service import has_permission  # local import: avoids a core<->services import cycle
 
-        if user.role.name == RoleName.HR_ADMIN:
+        if user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
             return user
         if not has_permission(db, user, code):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing permission: {code}")

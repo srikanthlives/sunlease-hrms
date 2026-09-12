@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 def _to_user_out(db: Session, user: User) -> UserOut:
-    permissions = Permission.ALL if user.role.name == RoleName.HR_ADMIN else [
+    permissions = Permission.ALL if user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN) else [
         g.permission_code for g in permission_service.role_permission_grants(db, user.role_id)
     ]
     return UserOut(
@@ -24,13 +24,45 @@ def _to_user_out(db: Session, user: User) -> UserOut:
     )
 
 
+def _log_auth(msg: str):
+    # Plain print with an [AUTH] prefix, matching this codebase's existing
+    # [STARTUP]/[EMAIL]-style diagnostics convention (nothing configures a
+    # logging handler/level, so stdlib `logging` calls would silently
+    # vanish) - visible in `docker logs`/Railway logs, so a "works locally,
+    # fails in production" login report has a concrete server-side cause
+    # instead of just the client's generic "Incorrect username or
+    # password" (kept generic on purpose, to not leak which part - username
+    # vs password vs account-disabled - was wrong to an attacker).
+    print(f"[AUTH] {msg}", flush=True)
+
+
 @router.post("/login", response_model=Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    username = form_data.username.strip()
+    if username != form_data.username:
+        _log_auth(f"login attempt for {form_data.username!r} - username had leading/trailing whitespace, using {username!r}")
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        _log_auth(f"login FAILED for {username!r}: no user with this username exists")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect username or password")
+
+    if not user.hashed_password:
+        _log_auth(f"login FAILED for {username!r} (user id={user.id}): hashed_password is empty/null in the database")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect username or password")
+
+    if not verify_password(form_data.password, user.hashed_password):
+        _log_auth(
+            f"login FAILED for {username!r} (user id={user.id}, role={user.role.name if user.role else None}): "
+            f"password did not match (see any verify_password error logged just above if the hash itself was malformed)"
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect username or password")
+
     if not user.is_active:
+        _log_auth(f"login REJECTED for {username!r} (user id={user.id}): account is_active=False")
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User account is disabled")
+
+    _log_auth(f"login OK for {username!r} (user id={user.id}, role={user.role.name if user.role else None})")
     token = create_access_token(subject=str(user.id), extra_claims={"role": user.role.name})
     audit_service.record(db, "USER", user.id, AuditAction.LOGIN, user)
     db.commit()

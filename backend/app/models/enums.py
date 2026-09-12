@@ -13,8 +13,15 @@ class RoleName:
     HR_STAFF = "HR_STAFF"
     APPROVER = "APPROVER"
     EMPLOYEE = "EMPLOYEE"
+    # A distinct role above HR_ADMIN, exclusively for the database
+    # backup/restore tools (core/deps.py::require_super_admin,
+    # routers/admin.py) - a superset of HR_ADMIN everywhere HR_ADMIN is
+    # allowed (see require_permission's bypass check), but HR_ADMIN itself
+    # cannot reach db-backup/db-restore. Mirrors sunlease-expms's
+    # SUPER_ADMIN role.
+    SUPER_ADMIN = "SUPER_ADMIN"
 
-    ALL = [HR_ADMIN, HR_STAFF, APPROVER, EMPLOYEE]
+    ALL = [HR_ADMIN, HR_STAFF, APPROVER, EMPLOYEE, SUPER_ADMIN]
 
 
 class EpisodeStatus:
