@@ -1,66 +1,105 @@
-# HRMS — Employee Data Management (Module 1)
+# HRMS — Sunlease Renewables
 
-Module 1 of a 4-module HRMS (Employee Data Management, Attendance, Payroll,
-Compliance), built from the attached blueprint
-(`HRMS_Module_1_Employee_Data_Management_Blueprint.docx`). Employee Data
-Management is the system-of-record foundation the other modules will later
-read from.
+A full 4-module HRMS built from the original blueprint
+(`HRMS_Module_1_Employee_Data_Management_Blueprint.docx`): **Employee Data
+Management**, **Attendance + Leave**, **Payroll Management**, and
+**Statutory Compliance**. Employee Data Management is the system-of-record
+foundation the other three modules read from.
 
 ## Stack
 
 - **Backend:** Python 3.12+, FastAPI, SQLAlchemy 2.x, Pydantic v2, JWT auth
 - **Database:** SQLite (file-based, zero setup)
 - **Frontend:** React 18 + Vite + React Router 6 + Axios, Tailwind CSS 3.4
+- **Formula engine:** `simpleeval` (sandboxed expression evaluation for
+  payroll salary-component formulas)
 
 ## What's implemented
 
-**Phase 1 — core:**
+**Module 1 — Employee Data Management:**
 - Organization model: Company → Cost Center → Project / Department, plus
-  admin-configurable Employee Categories
+  admin-configurable Employee Categories/Designations/Work Locations/
+  Employment Types (hard-deletable if unused, deactivated otherwise)
 - Employee (person) vs Employment Episode (a stint of employment) —
   rejoining creates a new episode, not a duplicate person record
-- Effective-dated Organizational Assignment and Cost Allocation, enforcing
-  "one active Department per employee at a time"
-- 8-step Employee Creation Wizard, saveable as Draft at any point: Personal,
-  Employment, Organizational Assignment, Statutory, Bank, Documents (stub),
-  Dependents/Nominees, Review & Submit
-- Employee lifecycle: Draft → Pending Approval → Approved/Active, plus
-  Separation
-- Employee Profile / 360° view (Overview, Personal, Employment,
-  Organization, Statutory, Bank, Dependents, Nominees, Audit History)
-- Append-only audit log on every create/update/status-change
+- Effective-dated Organizational Assignment and Cost Allocation
+- 8-step Employee Creation Wizard (Draft-saveable at any point)
+- Lifecycle: Draft → Pending Approval → Active, plus Separation; a Draft
+  can be deleted outright
+- Read-only Employee Review summary (all sections on one page), document
+  preview popups, list-level Edit/Delete actions
+- Bulk Excel upload that both creates new employees and **updates**
+  existing ones (routed through the same approval rules as a manual edit)
+- Granular RBAC, Cost Center data scoping, field-level sensitive-data
+  masking, multi-level approval routing, a real Change Request workflow
+- Append-only audit log
 
-**Version 2 — RBAC + approval routing:**
-- Granular permissions (`employee.view/create/edit/approve/separate`,
-  `employee.sensitive.view/edit`, `change_requests.review`, etc.), edited
-  live per role from the Roles & Permissions admin page
-- Cost Center data scoping — non-HR_ADMIN users only see/act on employees
-  in their assigned Cost Centers
-- Field-level access: Aadhaar/PAN/bank details/statutory numbers are
-  hidden from anyone without `employee.sensitive.view`
-- Multi-level approval routing (Cost Center + Employee Category +
-  Transaction Type → Approver Role/User, with a global fallback) for new
-  employee approval
-- A real Change Request workflow — edits to an already-Active employee's
-  identity/employment fields require Approver review instead of applying
-  directly
-- Admin UI: Users & Roles, Roles & Permissions, Approval Rules, Change
-  Requests
+**Module 2 — Attendance + Leave:**
+- Shifts, rosters (with duty allocation, weekly-off/rest-day flags, double
+  shifts), attendance capture with automatic late/early/overtime
+  calculation, exceptions, correction/overtime approval requests
+- Leave types, eligibility rules, lazily-accrued balances, applications
+  (with a supporting-document attachment), approvals, holiday calendar
+- An app-level Month + Cost Center filter that scopes every module's list
+  views consistently
+- Attendance Register (summary + per-employee drill-down) and a
+  spreadsheet-style Attendance Grid, both with bulk Excel upload
 
-**Deferred to a later pass** (see `CLAUDE.md` for the full list): Cloudflare
-R2 document upload, the multi-level approval routing engine, field-level
-RBAC, and the employee self-service portal.
+**Module 3 — Payroll Management:**
+- Salary components (Earning / Deduction / Employer Contribution /
+  Addition) and per-employee, effective-dated salary structure
+- A formula engine for component values — reference other components by
+  code or attendance day-count variables, with `IF`/`AND`/`OR`/`MIN`/
+  `MAX`/`ROUND`/`ROUNDUP`/`ROUNDDOWN` etc.
+- One-month value overrides (e.g. a component normally deducted but
+  waived this month) and an `Addition` component type for bonuses/
+  monthly variable pay that's paid out without inflating Gross/Net or the
+  PF/ESI wage base
+- Salary Templates (scoped to a Cost Center/Project or global) that load
+  into an employee's structure as an editable starting point, plus a
+  Sample Payslip preview
+- Monthly payroll processing with a real Draft → Processed → Approved →
+  Locked workflow, cost-center/project cost-allocation splitting, and
+  Full & Final Settlement (leave encashment + gratuity) at separation
+
+**Module 4 — Statutory Compliance:**
+- PF / ESI / Professional Tax / LWF / Gratuity aggregated from processed
+  payroll data per cost-center/month, with a filed/paid status and
+  challan reference tracking, plus downloadable (best-effort, not
+  government-portal-certified) statement exports
+
+**Cross-cutting:**
+- Outbound email infrastructure (direct SMTP or an HTTP mail relay for
+  hosts that block outbound SMTP) — wired up, not yet called by any
+  feature
+
+See `CLAUDE.md` for the full architectural detail and what's still
+deliberately deferred in each module.
 
 ## Running it
 
-The fastest way to run everything (backend + frontend build) is:
+### Docker (recommended — matches the deployed local instance)
+
+```bash
+docker compose up -d --build
+```
+
+Serves on **http://localhost:8020**, backed by a persistent `./data`
+volume (SQLite DB + uploaded attachments/documents). Set
+`HRMS_SECRET_KEY` in a `.env` file first (see `.env.example`) — outbound
+email settings are optional and can be left blank.
+
+### Manual dev setup
+
+The fastest way to run everything (backend + frontend build) locally
+without Docker is:
 
 ```bash
 ./startup.sh
 ```
 
 It creates the backend venv, installs dependencies, builds the frontend,
-and starts uvicorn on port 8000. For Docker or Railway, see
+and starts uvicorn on port 8000. For Docker or Railway specifics, see
 [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 To run backend and frontend separately in dev mode instead (this repo's
@@ -68,7 +107,7 @@ own dev sessions use port 8010 for the backend to avoid clashing with
 other local services on 8000 — adjust `frontend/.env.development` if you
 change it):
 
-### 1. Backend
+#### 1. Backend
 
 ```bash
 cd backend
@@ -91,10 +130,10 @@ Seeded logins:
 | Approver | `approver` | `Approver@123` |
 
 HR Admin bypasses all permission/scope checks. HR Staff and Approver are
-both scoped to the seeded Cost Center (`CC-PDY`) so the RBAC and
-approval-routing flow is testable right away.
+both scoped to the seeded Cost Center so the RBAC and approval-routing
+flow is testable right away.
 
-### 2. Frontend
+#### 2. Frontend
 
 ```bash
 cd frontend
@@ -105,6 +144,17 @@ npm run dev
 Opens at `http://localhost:5173` and talks to the API at the URL in
 `.env.development` (`VITE_API_URL`, defaults to `http://localhost:8010`).
 
+## Outbound email (optional)
+
+`backend/app/services/email_service.py` supports two transports, picked
+automatically based on which environment variables are set — see
+`.env.example` for the full list (`HRMS_SMTP_*` for direct SMTP, or
+`HRMS_MAIL_RELAY_URL`/`HRMS_MAIL_RELAY_SECRET` for the HTTP relay,
+`backend/scripts/cpanel-mail-relay.php`, needed on platforms that block
+outbound SMTP). Leaving all of these blank is fine — nothing in the app
+currently requires email to function; it's infrastructure for future
+notification features.
+
 ## Project layout
 
 ```
@@ -113,20 +163,25 @@ backend/
     core/        settings, JWT + password hashing, role-check dependencies
     db/          SQLAlchemy session/engine
     models/      SQLAlchemy models (models.py) + string-constant enums.py
-    schemas/     Pydantic request/response models
-    services/    business logic — audit, org-assignment/allocation rules
-    routers/     FastAPI route handlers
+    schemas/     Pydantic request/response models, one file per module
+    services/    business logic — audit, approval routing, per-module
+                 processing (employee, attendance, leave, payroll,
+                 compliance), bulk-import, email
+    routers/     FastAPI route handlers, one file per module
+    scripts/     cpanel-mail-relay.php (deploy to your mail server)
     seed.py      idempotent seed script
     migrate.py   auto-migration script (see below)
     main.py      app entrypoint
 frontend/
   src/
     api/         axios client with auth interceptor
-    context/     auth context (JWT storage, current user)
-    layouts/     sidebar shell
-    pages/       Login, Employees, EmployeeWizard, EmployeeProfile,
-                 Organization, AuditLogs
-    components/  shared UI primitives (ui.jsx)
+    context/     auth context + the app-level GlobalFilterContext
+                 (month/year/cost-center, used across every module)
+    layouts/     sidebar shell + GlobalFilterBar
+    pages/       one or more pages per module (Employees, Attendance,
+                 Leave, Payroll, Compliance, Organization Setup, Audit)
+    components/  shared UI primitives (ui.jsx) + a few cross-page
+                 components (EmployeeReviewSummary, DocumentPreviewModal)
 ```
 
 ## Schema changes / database migrations
@@ -146,3 +201,6 @@ For a genuine drop/rename/retype, or to start clean:
 ```bash
 rm -f data/hrms.db && cd backend && python -m app.seed
 ```
+
+Only do this if you explicitly want a clean slate — the running Docker
+container's `./data` volume is real, persisted data, not disposable.
