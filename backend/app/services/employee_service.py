@@ -1,8 +1,11 @@
+import secrets
 from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models.models import OrgAssignment, CostAllocation, Nominee, EmploymentEpisode
+from app.core.security import hash_password
+from app.models.enums import RoleName
+from app.models.models import OrgAssignment, CostAllocation, Nominee, EmploymentEpisode, Role, User
 
 
 def add_org_assignment(db: Session, episode_id: int, data: dict) -> OrgAssignment:
@@ -56,6 +59,63 @@ def episodes_in_cost_center_during(db: Session, cost_center_id: int | None, star
     if not episode_ids:
         return []
     return db.query(EmploymentEpisode).filter(EmploymentEpisode.id.in_(episode_ids)).all()
+
+
+def _generate_pin() -> str:
+    return f"{secrets.randbelow(10**8):08d}"
+
+
+def _employee_full_name(employee) -> str | None:
+    if not employee:
+        return None
+    parts = [employee.first_name, employee.middle_name, employee.last_name]
+    return " ".join(p for p in parts if p)
+
+
+def provision_self_service_login(db: Session, episode: EmploymentEpisode) -> dict | None:
+    """Creates a self-service (EMPLOYEE role) login for this episode's
+    Employee if one doesn't already exist, keyed by employee_number as the
+    username (blueprint §19). Returns {"username", "initial_pin"} only when
+    a new login was actually created (the plaintext PIN is never stored -
+    the caller must surface it once), or None if a login already existed."""
+    existing = db.query(User).filter(User.employee_id == episode.employee_id).first()
+    if existing:
+        return None
+
+    role = db.query(Role).filter(Role.name == RoleName.EMPLOYEE).first()
+    if not role:
+        return None
+
+    pin = _generate_pin()
+    user = User(
+        username=episode.employee_number,
+        full_name=_employee_full_name(episode.employee),
+        hashed_password=hash_password(pin),
+        role_id=role.id,
+        employee_id=episode.employee_id,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    return {"username": user.username, "initial_pin": pin}
+
+
+def reset_self_service_login(db: Session, episode: EmploymentEpisode) -> dict:
+    """Regenerates the PIN for an existing self-service login, or
+    provisions one if it's somehow missing (e.g. episode activated before
+    this feature existed). Always returns the new plaintext PIN once."""
+    user = db.query(User).filter(User.employee_id == episode.employee_id).first()
+    if not user:
+        result = provision_self_service_login(db, episode)
+        if not result:
+            raise ValueError("EMPLOYEE role not found - cannot provision a self-service login")
+        return result
+
+    pin = _generate_pin()
+    user.hashed_password = hash_password(pin)
+    user.is_active = True
+    db.add(user)
+    return {"username": user.username, "initial_pin": pin}
 
 
 def nominee_total(db: Session, episode_id: int, nomination_type: str | None) -> float:

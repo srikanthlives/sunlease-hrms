@@ -31,6 +31,8 @@ export default function EmployeeProfile() {
   const [sepBusy, setSepBusy] = useState(false);
   const [banner, setBanner] = useState("");
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [loginPin, setLoginPin] = useState(null);
+  const [loginBusy, setLoginBusy] = useState(false);
 
   function reload() {
     client.get(`/employees/${episodeId}`).then((res) => {
@@ -110,12 +112,27 @@ export default function EmployeeProfile() {
     setBusy(true);
     setError("");
     try {
-      await client.post(`/employees/${episodeId}/${action}`);
+      const res = await client.post(`/employees/${episodeId}/${action}`);
+      if (res.data?.self_service_login) setLoginPin(res.data.self_service_login);
       reload();
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function resetLogin() {
+    if (!window.confirm("Generate a new self-service login PIN for this employee? The previous PIN will stop working.")) return;
+    setLoginBusy(true);
+    setError("");
+    try {
+      const res = await client.post(`/employees/${episodeId}/reset-login`);
+      setLoginPin(res.data);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setLoginBusy(false);
     }
   }
 
@@ -201,8 +218,26 @@ export default function EmployeeProfile() {
           {episode.status !== "DRAFT" && episode.status !== "SEPARATED" && (user?.role === "HR_ADMIN" || can("employee.edit")) && (
             <Button variant="outline" onClick={() => navigate(`/employees/${episodeId}/wizard`)}>Edit</Button>
           )}
+          {episode.status !== "DRAFT" && (user?.role === "HR_ADMIN" || user?.role === "SUPER_ADMIN") && (
+            <Button variant="outline" onClick={resetLogin} disabled={loginBusy}>
+              {loginBusy ? "Working…" : "Reset Self-Service Login"}
+            </Button>
+          )}
         </div>
       </div>
+      {loginPin && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setLoginPin(null)}>
+          <div className="bg-white rounded-lg p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-3">Self-Service Login</h3>
+            <p className="text-sm text-ink/60 mb-3">Share these credentials with the employee. This PIN will not be shown again.</p>
+            <div className="bg-ink/5 rounded-md px-4 py-3 space-y-1 text-sm font-mono">
+              <div>Username: <span className="font-semibold">{loginPin.username}</span></div>
+              <div>PIN: <span className="font-semibold">{loginPin.initial_pin}</span></div>
+            </div>
+            <Button className="w-full mt-4" onClick={() => setLoginPin(null)}>Done</Button>
+          </div>
+        </div>
+      )}
       {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}
       {banner && <div className="text-sm text-brand-700 bg-brand-50 rounded-md px-3 py-2">{banner}</div>}
 

@@ -17,8 +17,8 @@ export default function Login() {
     setBusy(true);
     setError("");
     try {
-      await login(username, password);
-      navigate("/employees");
+      const me = await login(username, password);
+      navigate(me.role === "EMPLOYEE" ? "/portal" : "/employees");
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {

@@ -249,10 +249,12 @@ def list_employees(
     return rows
 
 
-@router.get("/{episode_id}", dependencies=[Depends(require_permission(Permission.EMPLOYEE_VIEW))])
-def get_employee(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    episode = _get_episode(db, episode_id)
-    _check_scope(db, user, episode)
+def build_employee_detail(db: Session, user: User, episode: EmploymentEpisode) -> dict:
+    """Assembles the full employee-detail shape (episode/employee/address/
+    assignments/allocations/statutory/bank/documents/dependents/nominees).
+    Caller is responsible for any scope/ownership check - this function
+    does none, so it's safe to reuse from a self-service /me endpoint that
+    checks ownership instead of Cost Center scope."""
     detail = {
         "episode": {
             "id": episode.id,
@@ -345,6 +347,13 @@ def get_employee(episode_id: int, db: Session = Depends(get_db), user: User = De
         "separation": _separation_dict(episode),
     }
     return permission_service.mask_sensitive_fields(db, user, detail)
+
+
+@router.get("/{episode_id}", dependencies=[Depends(require_permission(Permission.EMPLOYEE_VIEW))])
+def get_employee(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    episode = _get_episode(db, episode_id)
+    _check_scope(db, user, episode)
+    return build_employee_detail(db, user, episode)
 
 
 @router.put("/{episode_id}/personal", dependencies=[Depends(require_permission(Permission.EMPLOYEE_EDIT))])
@@ -670,7 +679,25 @@ def submit_for_approval(episode_id: int, db: Session = Depends(get_db), user: Us
 def approve_employee(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _get_episode(db, episode_id)
     approval_service.authorize_approval(db, user, episode, TransactionType.EMPLOYEE_CREATION)
-    return _transition(db, episode, EpisodeStatus.PENDING_APPROVAL, EpisodeStatus.ACTIVE, user)
+    result = _transition(db, episode, EpisodeStatus.PENDING_APPROVAL, EpisodeStatus.ACTIVE, user)
+    login = employee_service.provision_self_service_login(db, episode)
+    if login:
+        audit_service.record(db, "USER", episode.employee_id, AuditAction.CREATE, user, new_value=f"self-service login {login['username']}")
+        db.commit()
+        result["self_service_login"] = login
+    return result
+
+
+@router.post("/{episode_id}/reset-login", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
+def reset_login(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if user.role.name not in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only HR Admin or Super Admin can reset a self-service login")
+    episode = _get_episode(db, episode_id)
+    _check_scope(db, user, episode)
+    login = employee_service.reset_self_service_login(db, episode)
+    audit_service.record(db, "USER", episode.employee_id, AuditAction.UPDATE, user, new_value=f"self-service login reset for {login['username']}")
+    db.commit()
+    return login
 
 
 @router.post("/{episode_id}/reject")

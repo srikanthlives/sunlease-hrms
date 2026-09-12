@@ -2,7 +2,12 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { GlobalFilterProvider } from "./context/GlobalFilterContext";
 import MainLayout from "./layouts/MainLayout";
+import PortalLayout from "./layouts/PortalLayout";
 import Login from "./pages/Login";
+import MyProfile from "./pages/portal/MyProfile";
+import MyPayslips from "./pages/portal/MyPayslips";
+import MyLeave from "./pages/portal/MyLeave";
+import MyAttendance from "./pages/portal/MyAttendance";
 import Employees from "./pages/Employees";
 import EmployeeWizard from "./pages/EmployeeWizard";
 import EmployeeProfile from "./pages/EmployeeProfile";
@@ -43,10 +48,15 @@ import FullFinalSettlement from "./pages/FullFinalSettlement";
 import ComplianceOverview from "./pages/ComplianceOverview";
 import ComplianceRecords from "./pages/ComplianceRecords";
 
-function ProtectedRoute({ children }) {
+function ProtectedRoute({ children, portalOnly, adminOnly }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="min-h-screen flex items-center justify-center text-ink/40 text-sm">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
+  // EMPLOYEE-role logins are confined to the self-service portal - not
+  // just a UI nicety, since it's what stops an employee from navigating
+  // straight to an admin URL by hand.
+  if (adminOnly && user.role === "EMPLOYEE") return <Navigate to="/portal" replace />;
+  if (portalOnly && user.role !== "EMPLOYEE") return <Navigate to="/employees" replace />;
   return children;
 }
 
@@ -57,9 +67,23 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
+            path="/portal"
+            element={
+              <ProtectedRoute portalOnly>
+                <PortalLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="/portal/profile" replace />} />
+            <Route path="profile" element={<MyProfile />} />
+            <Route path="payslips" element={<MyPayslips />} />
+            <Route path="leave" element={<MyLeave />} />
+            <Route path="attendance" element={<MyAttendance />} />
+          </Route>
+          <Route
             path="/"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute adminOnly>
                 <GlobalFilterProvider>
                   <MainLayout />
                 </GlobalFilterProvider>

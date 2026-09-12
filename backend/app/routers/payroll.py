@@ -615,14 +615,9 @@ def list_payslips_aggregate(
     return {"run": _run_dict(run) if run else None, "employees": result}
 
 
-@router.get("/payslips/{payslip_id}", dependencies=[Depends(require_permission(Permission.PAYSLIP_VIEW))])
-def get_payslip_detail(payslip_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    payslip = db.query(Payslip).filter(Payslip.id == payslip_id).first()
-    if not payslip:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Payslip not found")
-    episode = payslip.episode
-    _check_scope(db, user, episode)
-
+def build_payslip_detail(db: Session, payslip: Payslip) -> dict:
+    """Assembles the full payslip-detail shape (summary + lines + cost
+    splits). Caller is responsible for any scope/ownership check."""
     lines = db.query(PayslipLine).filter(PayslipLine.payslip_id == payslip.id).all()
     splits = db.query(PayslipCostSplit).filter(PayslipCostSplit.payslip_id == payslip.id).all()
 
@@ -638,6 +633,16 @@ def get_payslip_detail(payslip_id: int, db: Session = Depends(get_db), user: Use
             for s in splits
         ],
     }
+
+
+@router.get("/payslips/{payslip_id}", dependencies=[Depends(require_permission(Permission.PAYSLIP_VIEW))])
+def get_payslip_detail(payslip_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    payslip = db.query(Payslip).filter(Payslip.id == payslip_id).first()
+    if not payslip:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Payslip not found")
+    episode = payslip.episode
+    _check_scope(db, user, episode)
+    return build_payslip_detail(db, payslip)
 
 
 # ---------------------------------------------------------------------------
