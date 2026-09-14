@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, AlertTriangle } from "lucide-react";
+import { Download, Upload, AlertTriangle, Pencil, KeyRound, ShieldOff, ShieldCheck } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
+
+const ADMIN_ROLES = ["HR_ADMIN", "SUPER_ADMIN"];
 
 export default function UsersAdmin() {
   const { user: me } = useAuth();
@@ -14,6 +16,8 @@ export default function UsersAdmin() {
   const [form, setForm] = useState({ username: "", full_name: "", email: "", password: "", role_id: "" });
   const [scopeUserId, setScopeUserId] = useState(null);
   const [scopeSelection, setScopeSelection] = useState([]);
+  const [editUser, setEditUser] = useState(null);
+  const [resetPasswordUser, setResetPasswordUser] = useState(null);
 
   function reload() {
     client.get("/auth/users").then((res) => setUsers(res.data));
@@ -53,14 +57,59 @@ export default function UsersAdmin() {
     setScopeSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
   }
 
+  async function toggleActive(u) {
+    setError("");
+    try {
+      await client.post(`/auth/users/${u.id}/set-active`, { is_active: !u.is_active });
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
+  }
+
   const columns = [
     { key: "username", header: "Username" },
     { key: "full_name", header: "Name", render: (u) => u.full_name || "—" },
     { key: "role", header: "Role", render: (u) => <StatusBadge status={u.role} /> },
+    { key: "is_active", header: "Status", render: (u) => (u.is_active ? <StatusBadge status="ACTIVE" /> : <StatusBadge status="DISABLED" />) },
     {
       key: "scope", header: "Cost Center Scope", render: (u) =>
         u.role === "HR_ADMIN" ? <span className="text-ink/40 text-xs">All (bypasses scope)</span> :
           <Button variant="outline" size="sm" onClick={() => openScope(u.id)} className="text-xs">Manage Scope</Button>,
+    },
+    {
+      key: "_actions", header: "", align: "right",
+      render: (u) => {
+        const targetIsAdmin = ADMIN_ROLES.includes(u.role);
+        const canEdit = !targetIsAdmin || isSuperAdmin;
+        const isSelf = u.id === me?.id;
+        return (
+          <div className="flex items-center gap-1 justify-end">
+            <button
+              type="button" title="Edit" disabled={!canEdit}
+              className={`p-1.5 rounded hover:bg-ink/5 ${canEdit ? "text-ink/50 hover:text-ink" : "text-ink/20 cursor-not-allowed"}`}
+              onClick={() => canEdit && setEditUser(u)}
+            >
+              <Pencil size={14} />
+            </button>
+            {isSuperAdmin && (
+              <button
+                type="button" title="Reset Password" className="p-1.5 rounded hover:bg-ink/5 text-ink/50 hover:text-ink"
+                onClick={() => setResetPasswordUser(u)}
+              >
+                <KeyRound size={14} />
+              </button>
+            )}
+            <button
+              type="button" title={u.is_active ? "Disable" : "Enable"} disabled={!canEdit || isSelf}
+              className={`p-1.5 rounded hover:bg-ink/5 ${!canEdit || isSelf ? "text-ink/20 cursor-not-allowed" : "text-ink/50 hover:text-ink"}`}
+              onClick={() => canEdit && !isSelf && toggleActive(u)}
+            >
+              {u.is_active ? <ShieldOff size={14} /> : <ShieldCheck size={14} />}
+            </button>
+          </div>
+        );
+      },
     },
   ];
 
@@ -95,6 +144,13 @@ export default function UsersAdmin() {
       </Card>
 
       {isSuperAdmin && <DatabaseBackupCard />}
+
+      {editUser && (
+        <EditUserModal user={editUser} roles={roles} isSuperAdmin={isSuperAdmin} onClose={() => setEditUser(null)} onSaved={reload} />
+      )}
+      {resetPasswordUser && (
+        <ResetPasswordModal user={resetPasswordUser} onClose={() => setResetPasswordUser(null)} />
+      )}
 
       {scopeUserId && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setScopeUserId(null)}>
@@ -177,6 +233,107 @@ function DatabaseBackupCard() {
         <RestoreConfirmModal file={pendingFile} onClose={() => setPendingFile(null)} />
       )}
     </Card>
+  );
+}
+
+function EditUserModal({ user, roles, isSuperAdmin, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    username: user.username, full_name: user.full_name || "", email: user.email || "",
+    role_id: String(roles.find((r) => r.name === user.role)?.id || ""),
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      await client.put(`/auth/users/${user.id}`, { ...form, role_id: Number(form.role_id) });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={busy ? undefined : onClose}>
+      <div className="bg-white rounded-lg p-5 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold text-ink mb-3">Edit User</h3>
+        {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2 mb-3">{error}</div>}
+        <div className="space-y-3">
+          <Input label="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          <Input label="Full Name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+          <Input label="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <Select
+            label="Role" value={form.role_id} onChange={(e) => setForm({ ...form, role_id: e.target.value })}
+            disabled={!isSuperAdmin && ADMIN_ROLES.includes(user.role)}
+          >
+            {roles
+              .filter((r) => isSuperAdmin || !ADMIN_ROLES.includes(r.name))
+              .map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </Select>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={save} disabled={busy || !form.username}>{busy ? "Saving…" : "Save"}</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResetPasswordModal({ user, onClose }) {
+  const [newPassword, setNewPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    setError("");
+    try {
+      await client.post(`/auth/users/${user.id}/reset-password`, { new_password: newPassword });
+      setDone(true);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={busy ? undefined : onClose}>
+      <div className="bg-white rounded-lg p-5 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        {done ? (
+          <>
+            <h3 className="text-sm font-semibold text-ink mb-2">Password reset</h3>
+            <p className="text-sm text-ink/60 mb-4">
+              Share the new password with <strong>{user.username}</strong> through a secure channel — it isn't
+              stored or shown anywhere else in the app.
+            </p>
+            <div className="flex justify-end">
+              <Button onClick={onClose}>Done</Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3 className="text-sm font-semibold text-ink mb-3">Reset Password — {user.username}</h3>
+            {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2 mb-3">{error}</div>}
+            <Input
+              label="New Password" type="password" value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)} autoFocus
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+              <Button onClick={submit} disabled={busy || newPassword.length < 8}>{busy ? "Resetting…" : "Reset Password"}</Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
