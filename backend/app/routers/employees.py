@@ -212,8 +212,17 @@ def list_employees(
 
     # Bulk-fetch the currently-open assignment per episode (and the Cost
     # Center/Department names it points at) instead of one query per row.
+    # Fall back to an open CostAllocation for the Cost Center column when
+    # there's no OrgAssignment yet (e.g. an episode just converted from a
+    # recruitment Candidate, which gets a CostAllocation immediately but
+    # no OrgAssignment/Department until the wizard's Org Assignment step
+    # - see employee_service.episodes_in_cost_center_during).
     open_assignments = db.query(OrgAssignment).filter(OrgAssignment.effective_to.is_(None)).all()
     assignment_by_episode = {a.episode_id: a for a in open_assignments}
+    open_allocations = db.query(CostAllocation).filter(CostAllocation.effective_to.is_(None)).all()
+    allocation_by_episode: dict[int, CostAllocation] = {}
+    for alloc in open_allocations:
+        allocation_by_episode.setdefault(alloc.episode_id, alloc)
     cost_centers = {c.id: c.name for c in db.query(CostCenter.id, CostCenter.name).all()}
     departments = {d.id: d.name for d in db.query(Department.id, Department.name).all()}
 
@@ -221,6 +230,9 @@ def list_employees(
     for e in episodes:
         assignment = assignment_by_episode.get(e.id)
         cc_id = assignment.cost_center_id if assignment else None
+        if cc_id is None:
+            allocation = allocation_by_episode.get(e.id)
+            cc_id = allocation.cost_center_id if allocation else None
         if not permission_service.can_see_cost_center(db, user, cc_id):
             continue
         # When a plain cost_center_id filter is given without year/month,

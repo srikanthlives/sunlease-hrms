@@ -8,13 +8,19 @@ import {
   MapPin, BadgeCheck, IdCard, FileStack, ClipboardList, CarFront,
   Clock, CalendarDays, ClipboardCheck, CalendarCheck, CalendarClock, CalendarRange, Palmtree,
   Wallet, Banknote, Settings2, PlayCircle, ReceiptText, PlusCircle, HandCoins,
-  ShieldAlert, FileSpreadsheet,
+  ShieldAlert, FileSpreadsheet, UserPlus, ListChecks,
 } from "lucide-react";
 
 const COLLAPSE_KEY = "hrms_sidebar_collapsed";
 
 const NAV = [
   { section: "", items: [{ to: "/employees", label: "Employees", icon: Users }] },
+  {
+    section: "Recruitment",
+    items: [
+      { to: "/recruitment/candidates", label: "Candidates", icon: UserPlus, perm: ["recruitment.view", "recruitment.manage"] },
+    ],
+  },
   {
     section: "Approvals",
     // any(perm) - visible to anyone who can submit (employee.edit) or review (change_requests.review); the page itself scopes rows by role server-side
@@ -84,6 +90,7 @@ const NAV = [
       { to: "/admin/approval-rules", label: "Approval Rules", icon: GitBranch },
       { to: "/admin/document-requirements", label: "Document Configuration", icon: ClipboardList },
       { to: "/admin/driving-licence-requirements", label: "Driving Licence Configuration", icon: CarFront },
+      { to: "/admin/selection-criteria", label: "Selection Criteria", icon: ListChecks },
       { to: "/admin/audit-logs", label: "Audit Logs", icon: ScrollText },
     ],
   },

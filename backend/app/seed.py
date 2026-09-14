@@ -28,7 +28,7 @@ from app.models.models import (
     Company, CostCenter, Department, Project, EmployeeCategory,
     WorkLocation, Designation, EmployeeType, DocumentType, DocumentRequirement,
     DrivingLicenceRequirement, ShiftMaster, LeaveType, LeaveEligibilityRule,
-    SalaryComponent, StatutoryConfig,
+    SalaryComponent, StatutoryConfig, SelectionCriteria, DesignationCriteria,
 )
 from app.models.enums import RoleName, Permission, TransactionType
 
@@ -279,6 +279,42 @@ try:
                 gratuity_days_per_year=15, gratuity_divisor=26,
                 lwf_employee_amount=0, lwf_employer_amount=0, lwf_frequency="MONTHLY",
             ))
+        db.flush()
+
+        # Module 5: Recruitment - Selection Criteria master + a sample
+        # requirement set for the Bus Driver designation (the blueprint's
+        # "Coach Captain a.k.a Driver" example): Govt Steering Test, Class
+        # Room Training Test, GCM Medical Test, Govt Medical Test, GCM
+        # Background Verification, Road Test - all mandatory, global
+        # (cost_center_id=None) so they apply everywhere this designation
+        # is used, per recruitment_service.required_criteria's cascade.
+        criteria_seed = [
+            "Govt Steering Test", "Class Room Training Test", "GCM Medical Test",
+            "Govt Medical Test", "GCM Background Verification", "Road Test",
+        ]
+        criteria_by_name = {}
+        for i, name in enumerate(criteria_seed):
+            row = db.query(SelectionCriteria).filter(SelectionCriteria.name == name).first()
+            if not row:
+                row = SelectionCriteria(name=name)
+                db.add(row)
+                db.flush()
+            criteria_by_name[name] = row
+        db.flush()
+
+        bus_driver_designation = db.query(Designation).filter(Designation.name == "Bus Driver").first()
+        if bus_driver_designation:
+            for i, name in enumerate(criteria_seed):
+                exists = db.query(DesignationCriteria).filter(
+                    DesignationCriteria.designation_id == bus_driver_designation.id,
+                    DesignationCriteria.cost_center_id.is_(None),
+                    DesignationCriteria.criteria_id == criteria_by_name[name].id,
+                ).first()
+                if not exists:
+                    db.add(DesignationCriteria(
+                        designation_id=bus_driver_designation.id, cost_center_id=None,
+                        criteria_id=criteria_by_name[name].id, is_mandatory=True, sequence=i,
+                    ))
         db.flush()
 
     db.commit()

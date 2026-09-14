@@ -103,6 +103,30 @@ class AuditAction:
     REJECT = "REJECT"
 
 
+class CandidateStatus:
+    APPLIED = "APPLIED"
+    IN_PROGRESS = "IN_PROGRESS"
+    # Set once HR approves the candidate (all mandatory selection criteria
+    # passed) - conversion (recruitment_service.convert_to_employee) then
+    # creates the Employee/EmploymentEpisode in DRAFT status, same as any
+    # other new hire, ready to continue through the normal wizard/approval
+    # flow.
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CONVERTED = "CONVERTED"
+    WITHDRAWN = "WITHDRAWN"
+
+    ALL = [APPLIED, IN_PROGRESS, APPROVED, REJECTED, CONVERTED, WITHDRAWN]
+
+
+class CriteriaResult:
+    PENDING = "PENDING"
+    PASS_ = "PASS"
+    FAIL = "FAIL"
+
+    ALL = [PENDING, PASS_, FAIL]
+
+
 class Permission:
     """Granular permission codes (blueprint §18). Checked via
     RolePermission grants - see core/deps.py::require_permission and
@@ -143,6 +167,10 @@ class Permission:
     COMPLIANCE_VIEW = "compliance.view"
     COMPLIANCE_FILE = "compliance.file"
 
+    # Module 5: Recruitment
+    RECRUITMENT_VIEW = "recruitment.view"
+    RECRUITMENT_MANAGE = "recruitment.manage"
+
     ALL = [
         EMPLOYEE_VIEW, EMPLOYEE_CREATE, EMPLOYEE_EDIT, EMPLOYEE_APPROVE, EMPLOYEE_SEPARATE,
         EMPLOYEE_SENSITIVE_VIEW, EMPLOYEE_SENSITIVE_EDIT,
@@ -152,6 +180,7 @@ class Permission:
         ATTENDANCE_APPROVE, LEAVE_APPLY, LEAVE_APPROVE, LEAVE_ADMIN,
         PAYROLL_VIEW, PAYROLL_PROCESS, PAYROLL_APPROVE, PAYROLL_LOCK,
         PAYSLIP_VIEW, FNF_PROCESS, COMPLIANCE_VIEW, COMPLIANCE_FILE,
+        RECRUITMENT_VIEW, RECRUITMENT_MANAGE,
     ]
 
     # Seed-time default grants per role (see seed.py). HR_ADMIN is not
@@ -176,6 +205,9 @@ class Permission:
             # PAYROLL_LOCK is deliberately excluded - HR_ADMIN-only.
             PAYROLL_VIEW, PAYROLL_PROCESS, PAYSLIP_VIEW, FNF_PROCESS,
             COMPLIANCE_VIEW, COMPLIANCE_FILE,
+            # Module 5: HR_STAFF runs the recruitment pipeline day to day,
+            # including converting a selected candidate to an employee.
+            RECRUITMENT_VIEW, RECRUITMENT_MANAGE,
         ],
         RoleName.APPROVER: [
             EMPLOYEE_VIEW, EMPLOYEE_APPROVE, EMPLOYEE_SENSITIVE_VIEW,
@@ -186,6 +218,7 @@ class Permission:
             # Module 3/4: APPROVER reviews/approves payroll runs and views
             # compliance records, but does not process or lock.
             PAYROLL_VIEW, PAYROLL_APPROVE, PAYSLIP_VIEW, COMPLIANCE_VIEW,
+            RECRUITMENT_VIEW,
         ],
         RoleName.EMPLOYEE: [
             # Module 2: EMPLOYEE can view their own attendance and apply

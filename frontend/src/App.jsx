@@ -47,6 +47,9 @@ import AdhocPayEntries from "./pages/AdhocPayEntries";
 import FullFinalSettlement from "./pages/FullFinalSettlement";
 import ComplianceOverview from "./pages/ComplianceOverview";
 import ComplianceRecords from "./pages/ComplianceRecords";
+import Candidates from "./pages/Candidates";
+import CandidateDetail from "./pages/CandidateDetail";
+import SelectionCriteriaConfig from "./pages/SelectionCriteriaConfig";
 
 function ProtectedRoute({ children, portalOnly, adminOnly }) {
   const { user, loading } = useAuth();
@@ -125,6 +128,9 @@ export default function App() {
             <Route path="full-final-settlement" element={<FullFinalSettlement />} />
             <Route path="compliance-overview" element={<ComplianceOverview />} />
             <Route path="compliance-records" element={<ComplianceRecords />} />
+            <Route path="recruitment/candidates" element={<Candidates />} />
+            <Route path="recruitment/candidates/:candidateId" element={<CandidateDetail />} />
+            <Route path="admin/selection-criteria" element={<SelectionCriteriaConfig />} />
             <Route path="admin/users" element={<UsersAdmin />} />
             <Route path="admin/roles-permissions" element={<RolesPermissions />} />
             <Route path="admin/approval-rules" element={<ApprovalRules />} />

@@ -1278,3 +1278,209 @@ class ComplianceRecord(Base):
     updated_at = Column(DateTime, default=now, onupdate=now)
 
     cost_center = relationship("CostCenter")
+
+
+# ---------------------------------------------------------------------------
+# Module 5: Recruitment
+# ---------------------------------------------------------------------------
+
+class SelectionCriteria(Base):
+    """Master list of selection-process stages/tests (e.g. "Govt Steering
+    Test", "GCM Medical Test") - admin-configurable, same master-data
+    pattern as Designation/EmployeeCategory."""
+
+    __tablename__ = "selection_criteria"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(150), unique=True, nullable=False)
+    description = Column(String(255))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+
+
+class DesignationCriteria(Base):
+    """Which SelectionCriteria a Designation requires to pass before a
+    candidate can be converted to an employee. cost_center_id is nullable
+    - a null row applies to the designation everywhere (global), a
+    non-null row applies only within that Cost Center and is more
+    specific - same most-specific-first cascade idea as
+    LeaveEligibilityRule/ApprovalRule (see
+    recruitment_service.required_criteria)."""
+
+    __tablename__ = "designation_criteria"
+    __table_args__ = (UniqueConstraint("designation_id", "cost_center_id", "criteria_id", name="uq_designation_criteria"),)
+
+    id = Column(Integer, primary_key=True)
+    designation_id = Column(Integer, ForeignKey("designations.id"), nullable=False)
+    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=True)
+    criteria_id = Column(Integer, ForeignKey("selection_criteria.id"), nullable=False)
+    is_mandatory = Column(Boolean, default=True)
+    sequence = Column(Integer, default=0)
+    created_at = Column(DateTime, default=now)
+
+    designation = relationship("Designation")
+    cost_center = relationship("CostCenter")
+    criteria = relationship("SelectionCriteria")
+
+
+class Candidate(Base):
+    """A potential employee, tracked by reference_number rather than an
+    employee_number/Employee row - no Employee/EmploymentEpisode exists
+    for a candidate until conversion (see
+    recruitment_service.convert_to_employee). Deliberately a much
+    smaller field set than Employee - only what's needed to run the
+    selection process and pre-fill the wizard on conversion."""
+
+    __tablename__ = "candidates"
+
+    id = Column(Integer, primary_key=True)
+    # Nullable at the DB level only because it's derived from the row's own
+    # id (recruitment_service.generate_reference_number) and so can't be
+    # known until after the initial insert/flush - the router always sets
+    # it in the same request before commit, so it's never actually null
+    # once a caller can see the row.
+    reference_number = Column(String(50), unique=True, nullable=True)
+
+    first_name = Column(String(100), nullable=False)
+    middle_name = Column(String(100))
+    last_name = Column(String(100), nullable=False)
+    father_husband_name = Column(String(255))
+    gender = Column(String(20))
+    date_of_birth = Column(Date)
+    mobile_number = Column(String(20))
+    alternate_mobile_number = Column(String(20))
+    personal_email = Column(String(255))
+    educational_qualification = Column(String(255))
+    # Mirrors Employee's "Previous Experience" section, but named "current"
+    # here since a candidate's employer at application time is their
+    # CURRENT one - it only becomes their "previous" employer once they're
+    # converted (see recruitment_service.convert_to_employee, which maps
+    # these onto Employee.previous_designation/previous_company_name/
+    # previous_company_details/previous_date_of_joining).
+    current_designation = Column(String(150))
+    current_company_name = Column(String(255))
+    current_company_details = Column(Text)
+    current_date_of_joining = Column(Date)
+    total_experience_years = Column(Float)
+    # Checked for duplicates against both Employee.aadhaar and other
+    # candidates' aadhaar on create/update - see
+    # recruitment_service.check_aadhaar_duplicates. A match is surfaced as
+    # a warning, never a hard block (the same person could legitimately be
+    # re-applying, or it could be a data-entry mistake HR needs to see and
+    # judge, not one the system should silently prevent).
+    aadhaar = Column(String(20))
+
+    applied_designation_id = Column(Integer, ForeignKey("designations.id"), nullable=False)
+    applied_employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=True)
+    applied_cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=False)
+    applied_project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    # Legacy - Organizational Assignment for a candidate only ever captured
+    # Cost Center + Project (Department is decided later, during the
+    # post-conversion wizard); kept only because migrate.py never drops
+    # columns, no longer read or written.
+    applied_department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
+
+    applied_date = Column(Date, default=dt.date.today)
+    source = Column(String(150))
+    status = Column(String(20), default="APPLIED")  # CandidateStatus
+    remarks = Column(Text)
+
+    converted_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
+    converted_episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=True)
+
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    designation = relationship("Designation")
+    employee_category = relationship("EmployeeCategory")
+    cost_center = relationship("CostCenter")
+    project = relationship("Project")
+    department = relationship("Department")
+    stage_results = relationship("CandidateStageResult", back_populates="candidate", cascade="all, delete-orphan")
+    salary_components = relationship("CandidateSalaryComponent", back_populates="candidate", cascade="all, delete-orphan")
+    documents = relationship("CandidateDocument", back_populates="candidate", cascade="all, delete-orphan")
+
+
+class CandidateStageResult(Base):
+    """One row per (candidate, criteria) - the candidate's result for that
+    selection stage. Starts absent (treated as PENDING) until HR records a
+    result; recruitment_service.required_criteria + this table together
+    answer "has this candidate passed everything their designation
+    requires". Carries one optional proof-of-completion attachment (e.g. a
+    scanned test result/certificate) - single-attachment-per-row, same
+    convention as LeaveApplication's supporting document (see
+    services/recruitment_service.py::save_stage_result_attachment)."""
+
+    __tablename__ = "candidate_stage_results"
+    __table_args__ = (UniqueConstraint("candidate_id", "criteria_id", name="uq_candidate_stage_result"),)
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
+    criteria_id = Column(Integer, ForeignKey("selection_criteria.id"), nullable=False)
+    result = Column(String(20), default="PENDING")  # PENDING/PASS/FAIL
+    tested_on = Column(Date, nullable=True)
+    remarks = Column(String(500), nullable=True)
+    reviewed_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    attachment_object_key = Column(String(500), nullable=True)
+    attachment_file_name = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    candidate = relationship("Candidate", back_populates="stage_results")
+    criteria = relationship("SelectionCriteria")
+    reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
+
+
+class CandidateSalaryComponent(Base):
+    """The salary HR sets for a candidate once selection clears, held here
+    (not yet effective-dated - there's no episode to date it against
+    until conversion) and copied verbatim into SalaryStructureComponent
+    rows by recruitment_service.convert_to_employee, using the same
+    set_salary_structure_component this codebase already uses everywhere
+    else for that table."""
+
+    __tablename__ = "candidate_salary_components"
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
+    component_id = Column(Integer, ForeignKey("salary_components.id"), nullable=False)
+    amount = Column(Float, nullable=True)
+    percentage = Column(Float, nullable=True)
+    formula = Column(String(500), nullable=True)
+
+    candidate = relationship("Candidate", back_populates="salary_components")
+    component = relationship("SalaryComponent")
+
+
+class CandidateDocument(Base):
+    """One row per (candidate, DocumentType) uploaded during recruitment -
+    same shape/convention as DocumentMeta (episode-scoped documents), but
+    for a Candidate that has no episode yet. Which DocumentTypes are
+    required is NOT configured separately for recruitment - it reuses the
+    exact same DocumentRequirement rules (scoped by Employee Category/
+    Designation) that already drive the Documents step of the Employee
+    wizard, matched against the candidate's applied designation/category
+    (see services/document_service.py::resolve_required_documents_for_candidate).
+    On conversion, these are copied into DocumentMeta rows for the new
+    episode so the candidate never has to re-upload (see
+    services/document_service.py::copy_candidate_documents_to_episode)."""
+
+    __tablename__ = "candidate_documents"
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
+    document_type_id = Column(Integer, ForeignKey("document_types.id"), nullable=True)
+
+    document_type = Column(String(100), nullable=False)  # denormalized DocumentType.name snapshot
+    file_name = Column(String(500))
+    object_key = Column(String(500))
+    file_size = Column(Integer)
+    mime_type = Column(String(100))
+    version = Column(Integer, default=1)
+    uploaded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    verification_status = Column(String(20), default="PENDING")
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    candidate = relationship("Candidate", back_populates="documents")
+    document_type_rel = relationship("DocumentType")
+    uploaded_by = relationship("User")

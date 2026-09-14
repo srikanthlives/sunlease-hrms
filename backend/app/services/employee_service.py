@@ -43,19 +43,35 @@ def active_allocation_total(db: Session, episode_id: int) -> float:
 
 
 def episodes_in_cost_center_during(db: Session, cost_center_id: int | None, start_date: date, end_date: date) -> list[EmploymentEpisode]:
-    """Episodes with an OrgAssignment (in cost_center_id, if given - else
-    across ALL cost centers) overlapping [start_date, end_date]. Used to
-    answer "who was in Cost Center X during month Y" for the app-level
-    Month+Cost Center filter (Employees/Attendance/Leave list scoping).
-    Returns distinct EmploymentEpisode objects (an episode could in theory
-    have been reassigned within the window - only counted once)."""
-    query = db.query(OrgAssignment.episode_id).filter(
+    """Episodes "in" Cost Center X during [start_date, end_date] - matched
+    via EITHER an overlapping OrgAssignment OR an overlapping
+    CostAllocation (in cost_center_id, if given - else across ALL cost
+    centers). Used to answer "who was in Cost Center X during month Y" for
+    the app-level Month+Cost Center filter (Employees/Attendance/Leave/
+    Payroll/Compliance list scoping).
+
+    CostAllocation is included, not just OrgAssignment, because the two
+    are independent in this codebase's model (blueprint §6) - an episode
+    converted straight from a recruitment Candidate
+    (recruitment_service.convert_to_employee) gets a CostAllocation
+    immediately but no OrgAssignment (Department is filled in later, via
+    the wizard), and would otherwise vanish from every month-filtered list
+    in the app until someone completed that step, despite genuinely
+    existing and being assigned to a cost center. Returns distinct
+    EmploymentEpisode objects (an episode could in theory have been
+    reassigned/reallocated within the window - only counted once)."""
+    org_query = db.query(OrgAssignment.episode_id).filter(
         OrgAssignment.effective_from <= end_date,
         (OrgAssignment.effective_to.is_(None)) | (OrgAssignment.effective_to >= start_date),
     )
+    alloc_query = db.query(CostAllocation.episode_id).filter(
+        CostAllocation.effective_from <= end_date,
+        (CostAllocation.effective_to.is_(None)) | (CostAllocation.effective_to >= start_date),
+    )
     if cost_center_id is not None:
-        query = query.filter(OrgAssignment.cost_center_id == cost_center_id)
-    episode_ids = {row[0] for row in query.distinct().all()}
+        org_query = org_query.filter(OrgAssignment.cost_center_id == cost_center_id)
+        alloc_query = alloc_query.filter(CostAllocation.cost_center_id == cost_center_id)
+    episode_ids = {row[0] for row in org_query.distinct().all()} | {row[0] for row in alloc_query.distinct().all()}
     if not episode_ids:
         return []
     return db.query(EmploymentEpisode).filter(EmploymentEpisode.id.in_(episode_ids)).all()
