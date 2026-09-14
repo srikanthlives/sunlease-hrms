@@ -43,7 +43,6 @@ export default function Login() {
           <Button type="submit" className="w-full" disabled={busy}>
             {busy ? "Signing in…" : "Sign in"}
           </Button>
-          <p className="text-xs text-ink/40 text-center">Seeded login: admin / Admin@123</p>
         </form>
       </div>
     </div>
