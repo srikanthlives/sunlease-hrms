@@ -116,9 +116,9 @@ export default function MainLayout() {
   });
   const hideGlobalFilter = GLOBAL_FILTER_HIDDEN_PREFIXES.some((p) => location.pathname.startsWith(p));
 
-  function toggleSection(sectionName) {
+  function toggleSection(sectionName, nextCollapsed) {
     setCollapsedSections((prev) => {
-      const next = { ...prev, [sectionName]: !prev[sectionName] };
+      const next = { ...prev, [sectionName]: nextCollapsed };
       localStorage.setItem(SECTION_COLLAPSE_KEY, JSON.stringify(next));
       return next;
     });
@@ -158,19 +158,23 @@ export default function MainLayout() {
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-3 space-y-5">
           {NAV.map((s) => ({ ...s, items: s.items.filter(visible) })).filter((s) => visible(s) && s.items.length > 0).map((section) => {
             const hasActiveItem = section.items.some((item) => location.pathname.startsWith(item.to));
-            // Collapsed by default; a section only stays expanded once the
-            // user has explicitly opened it (collapsedSections[name] === false).
-            const sectionCollapsed = section.section && !hasActiveItem && collapsedSections[section.section] !== false;
+            // Collapsed by default; once the user explicitly toggles a
+            // section, that explicit choice wins on every render (a section
+            // containing the active page still starts open, but a user's own
+            // click always takes effect immediately - no relying on
+            // hasActiveItem to flip it back open behind their click).
+            const stored = collapsedSections[section.section];
+            const sectionCollapsed = section.section && (stored !== undefined ? stored : !hasActiveItem);
             return (
             <div key={section.section || "root"}>
               {section.section && !collapsed && (
                 <button
                   type="button"
-                  onClick={() => toggleSection(section.section)}
-                  className="w-full flex items-center justify-between px-2 mb-1.5 text-[10px] uppercase tracking-widest text-white/30 font-medium hover:text-white/50"
+                  onClick={() => toggleSection(section.section, !sectionCollapsed)}
+                  className="w-full flex items-center justify-between px-2 mb-1.5 text-xs uppercase tracking-widest text-white/40 font-semibold hover:text-white/60"
                 >
                   <span>{section.section}</span>
-                  <ChevronDown size={12} strokeWidth={2.5} className={`transition-transform ${sectionCollapsed ? "-rotate-90" : ""}`} />
+                  <ChevronDown size={13} strokeWidth={2.5} className={`transition-transform ${sectionCollapsed ? "-rotate-90" : ""}`} />
                 </button>
               )}
               {!sectionCollapsed && (
