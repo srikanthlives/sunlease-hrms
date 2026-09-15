@@ -49,6 +49,7 @@ import ComplianceOverview from "./pages/ComplianceOverview";
 import ComplianceRecords from "./pages/ComplianceRecords";
 import Candidates from "./pages/Candidates";
 import CandidateDetail from "./pages/CandidateDetail";
+import CandidateChangeRequests from "./pages/CandidateChangeRequests";
 import SelectionCriteriaConfig from "./pages/SelectionCriteriaConfig";
 
 function ProtectedRoute({ children, portalOnly, adminOnly }) {
@@ -130,6 +131,7 @@ export default function App() {
             <Route path="compliance-records" element={<ComplianceRecords />} />
             <Route path="recruitment/candidates" element={<Candidates />} />
             <Route path="recruitment/candidates/:candidateId" element={<CandidateDetail />} />
+            <Route path="recruitment/change-requests" element={<CandidateChangeRequests />} />
             <Route path="admin/selection-criteria" element={<SelectionCriteriaConfig />} />
             <Route path="admin/users" element={<UsersAdmin />} />
             <Route path="admin/roles-permissions" element={<RolesPermissions />} />

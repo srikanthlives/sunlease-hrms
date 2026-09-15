@@ -188,7 +188,7 @@ function MarkFiledModal({ record, onClose, onDone }) {
               className="w-full rounded-md border border-ink/15 px-3 py-2 text-sm bg-white focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"
               rows={3}
               value={remarks}
-              onChange={(e) => setRemarks(e.target.value)}
+              onChange={(e) => setRemarks(e.target.value.toUpperCase())}
             />
           </label>
         </div>

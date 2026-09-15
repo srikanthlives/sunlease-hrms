@@ -1,6 +1,12 @@
 from datetime import date
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
+
+from app.core.validators import validate_aadhaar, validate_email_format, validate_mobile, validate_pan
+
+
+class ChangeRequestReviewIn(BaseModel):
+    remarks: str | None = None
 
 
 class SelectionCriteriaIn(BaseModel):
@@ -33,7 +39,26 @@ class CandidateIn(BaseModel):
     current_company_details: str | None = None
     current_date_of_joining: date | None = None
     total_experience_years: float | None = None
+
+    # Identity Documents - Name/DOB as printed on the card, alongside the
+    # Number, for both Aadhaar and PAN (mirrors Employee's own fields;
+    # copied over verbatim on conversion).
     aadhaar: str | None = None
+    aadhaar_name: str | None = None
+    aadhaar_dob: date | None = None
+    pan: str | None = None
+    pan_name: str | None = None
+    pan_dob: date | None = None
+
+    # Driving Licence - only shown/relevant when
+    # licence_service.resolve_driving_licence_requirement_for_candidate
+    # matches this candidate's applied Category/Designation.
+    dl_licence_number: str | None = None
+    dl_badge_number: str | None = None
+    dl_vehicle_class: str | None = None
+    dl_issuing_authority: str | None = None
+    dl_issue_date: date | None = None
+    dl_expiry_date: date | None = None
 
     applied_designation_id: int
     applied_employee_category_id: int | None = None
@@ -42,6 +67,40 @@ class CandidateIn(BaseModel):
     applied_date: date | None = None
     source: str | None = None
     remarks: str | None = None
+
+    @field_validator("aadhaar")
+    @classmethod
+    def _check_aadhaar(cls, v):
+        return validate_aadhaar(v) if v else v
+
+    @field_validator("pan")
+    @classmethod
+    def _check_pan(cls, v):
+        return validate_pan(v) if v else v
+
+    @field_validator("mobile_number", "alternate_mobile_number")
+    @classmethod
+    def _check_mobile(cls, v):
+        return validate_mobile(v) if v else v
+
+    @field_validator("personal_email")
+    @classmethod
+    def _check_email(cls, v):
+        return validate_email_format(v) if v else v
+
+    @field_validator("total_experience_years")
+    @classmethod
+    def _check_experience(cls, v):
+        if v is not None and not (0 <= v <= 60):
+            raise ValueError("Total Experience must be between 0 and 60 years")
+        return v
+
+    @field_validator("date_of_birth", "aadhaar_dob", "pan_dob")
+    @classmethod
+    def _check_dob_not_future(cls, v):
+        if v and v > date.today():
+            raise ValueError("Date of Birth cannot be in the future")
+        return v
 
 
 class CandidateStageResultIn(BaseModel):

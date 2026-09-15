@@ -3,10 +3,16 @@ from pydantic import BaseModel
 
 class CompanyIn(BaseModel):
     name: str
+    code: str
 
 
-class CompanyOut(CompanyIn):
+class CompanyOut(BaseModel):
     id: int
+    name: str
+    # Optional here (unlike CompanyIn, where it's required for new/edited
+    # rows) only to tolerate legacy Company rows created before this
+    # column existed - migrate.py never backfills existing data.
+    code: str | None = None
     is_active: bool
 
     class Config:
@@ -42,7 +48,6 @@ class ProjectOut(ProjectIn):
 
 
 class DepartmentIn(BaseModel):
-    cost_center_id: int
     name: str
     code: str
 
@@ -72,6 +77,12 @@ class WorkLocationIn(BaseModel):
     project_id: int
     name: str
     code: str
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    pincode: str | None = None
+    country: str | None = None
 
 
 class WorkLocationOut(WorkLocationIn):
@@ -83,6 +94,7 @@ class WorkLocationOut(WorkLocationIn):
 
 
 class DesignationIn(BaseModel):
+    employee_category_id: int | None = None
     name: str
     description: str | None = None
 

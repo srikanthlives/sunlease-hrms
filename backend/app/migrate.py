@@ -36,10 +36,46 @@ def _add_column_ddl(table_name: str, column) -> str:
     return " ".join(parts)
 
 
+def _drop_departments_cost_center_id(target_engine: Engine, inspector, verbose: bool) -> bool:
+    """One-off fixup: Department used to require a Cost Center
+    (cost_center_id NOT NULL). It's now a flat, reusable label with no
+    parent, but SQLite can't ALTER a column's nullability/drop it
+    in-place, so a plain additive column-add wouldn't remove the stale
+    NOT NULL constraint and every new Department insert would fail.
+    Rebuilds the table (SQLite's standard column-drop workaround),
+    preserving every existing row's id/name/code/is_active/created_at -
+    zero data loss. Idempotent: only runs while the old column is still
+    there."""
+    if "departments" not in inspector.get_table_names():
+        return False
+    live_columns = {c["name"] for c in inspector.get_columns("departments")}
+    if "cost_center_id" not in live_columns:
+        return False
+
+    with target_engine.begin() as conn:
+        conn.execute(text(
+            'CREATE TABLE "departments_new" ('
+            '"id" INTEGER NOT NULL PRIMARY KEY, "name" VARCHAR(255) NOT NULL, '
+            '"code" VARCHAR(50) NOT NULL UNIQUE, "is_active" BOOLEAN, "created_at" DATETIME)'
+        ))
+        conn.execute(text(
+            'INSERT INTO "departments_new" (id, name, code, is_active, created_at) '
+            'SELECT id, name, code, is_active, created_at FROM "departments"'
+        ))
+        conn.execute(text('DROP TABLE "departments"'))
+        conn.execute(text('ALTER TABLE "departments_new" RENAME TO "departments"'))
+
+    if verbose:
+        print("Rebuilt departments table to drop the retired cost_center_id column (no data lost).")
+    return True
+
+
 def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
     target_engine = target_engine or engine
     summary = {"tables_created": [], "columns_added": []}
 
+    inspector = inspect(target_engine)
+    _drop_departments_cost_center_id(target_engine, inspector, verbose)
     inspector = inspect(target_engine)
     existing_tables = set(inspector.get_table_names())
     all_tables = list(Base.metadata.tables.values())

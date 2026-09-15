@@ -124,7 +124,7 @@ export default function UsersAdmin() {
       <Card>
         <h2 className="text-sm font-semibold text-ink mb-3">New User</h2>
         <div className="grid grid-cols-5 gap-2">
-          <Input placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          <Input placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} noUppercase />
           <Input placeholder="Full Name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
           <Input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           <Input placeholder="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
@@ -264,7 +264,7 @@ function EditUserModal({ user, roles, isSuperAdmin, onClose, onSaved }) {
         <h3 className="text-sm font-semibold text-ink mb-3">Edit User</h3>
         {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2 mb-3">{error}</div>}
         <div className="space-y-3">
-          <Input label="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          <Input label="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} noUppercase />
           <Input label="Full Name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
           <Input label="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           <Select

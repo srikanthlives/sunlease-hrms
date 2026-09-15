@@ -89,6 +89,12 @@ class Company(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False)
+    # Nullable at the DB level only for existing rows created before this
+    # column existed (migrate.py never backfills) - the schema/UI require
+    # it for every new/edited Company. Used as the first segment of a
+    # recruitment Candidate's Application Reference Number (see
+    # recruitment_service.generate_reference_number).
+    code = Column(String(50), unique=True, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=now)
 
@@ -107,7 +113,6 @@ class CostCenter(Base):
 
     company = relationship("Company", back_populates="cost_centers")
     projects = relationship("Project", back_populates="cost_center")
-    departments = relationship("Department", back_populates="cost_center")
 
 
 class Project(Base):
@@ -124,16 +129,18 @@ class Project(Base):
 
 
 class Department(Base):
+    """Global, reusable label - not tied to any single Cost Center. An
+    employee's OrgAssignment picks a Department independently of Cost
+    Center; it exists purely so data can be filtered/reported by
+    department across cost centers."""
+
     __tablename__ = "departments"
 
     id = Column(Integer, primary_key=True)
-    cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=False)
     name = Column(String(255), nullable=False)
     code = Column(String(50), unique=True, nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=now)
-
-    cost_center = relationship("CostCenter", back_populates="departments")
 
 
 class EmployeeCategory(Base):
@@ -147,6 +154,8 @@ class EmployeeCategory(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=now)
 
+    designations = relationship("Designation", back_populates="employee_category")
+
 
 class WorkLocation(Base):
     """Admin-configurable, linked to a Project (each Project's site(s))."""
@@ -157,6 +166,12 @@ class WorkLocation(Base):
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     name = Column(String(150), nullable=False)
     code = Column(String(50), unique=True, nullable=False)
+    address_line1 = Column(String(255))
+    address_line2 = Column(String(255))
+    city = Column(String(100))
+    state = Column(String(100))
+    pincode = Column(String(20))
+    country = Column(String(100))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=now)
 
@@ -170,10 +185,13 @@ class Designation(Base):
     __tablename__ = "designations"
 
     id = Column(Integer, primary_key=True)
+    employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=True)
     name = Column(String(150), unique=True, nullable=False)
     description = Column(String(255))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=now)
+
+    employee_category = relationship("EmployeeCategory", back_populates="designations")
 
 
 class EmployeeType(Base):
@@ -294,8 +312,18 @@ class Employee(Base):
     emergency_contact_name = Column(String(255))
     emergency_contact_relationship = Column(String(100))
     emergency_contact_mobile = Column(String(20))
+    # Identity Documents subsection - Name/DOB as printed on the card,
+    # alongside the Number, for both Aadhaar and PAN (previously just the
+    # bare number). Name commonly differs slightly from the employee's own
+    # name (middle name omitted, spelling variants), and DOB on the card
+    # is what gets cross-checked against official records, so both are
+    # captured rather than assumed to match Personal Information.
     aadhaar = Column(String(20))
+    aadhaar_name = Column(String(255))
+    aadhaar_dob = Column(Date)
     pan = Column(String(20))
+    pan_name = Column(String(255))
+    pan_dob = Column(Date)
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
@@ -1362,6 +1390,10 @@ class Candidate(Base):
     current_company_details = Column(Text)
     current_date_of_joining = Column(Date)
     total_experience_years = Column(Float)
+    # Identity Documents subsection - Name/DOB as printed on the card
+    # alongside the Number, same shape as Employee's own Aadhaar/PAN
+    # fields, copied over verbatim on conversion
+    # (recruitment_service.convert_to_employee).
     # Checked for duplicates against both Employee.aadhaar and other
     # candidates' aadhaar on create/update - see
     # recruitment_service.check_aadhaar_duplicates. A match is surfaced as
@@ -1369,6 +1401,26 @@ class Candidate(Base):
     # re-applying, or it could be a data-entry mistake HR needs to see and
     # judge, not one the system should silently prevent).
     aadhaar = Column(String(20))
+    aadhaar_name = Column(String(255))
+    aadhaar_dob = Column(Date)
+    pan = Column(String(20))
+    pan_name = Column(String(255))
+    pan_dob = Column(Date)
+
+    # Driving Licence - shown/required based on the same
+    # DrivingLicenceRequirement rules (Employee Category/Designation) used
+    # for employees, matched against the candidate's applied Category/
+    # Designation (see services/licence_service.py::
+    # resolve_driving_licence_requirement_for_candidate). Flattened onto
+    # Candidate rather than a separate table since it's one row per
+    # candidate, same reasoning as Current Experience above. Copied into a
+    # DrivingLicenceDetail row for the new episode on conversion.
+    dl_licence_number = Column(String(50))
+    dl_badge_number = Column(String(50))
+    dl_vehicle_class = Column(String(100))
+    dl_issuing_authority = Column(String(255))
+    dl_issue_date = Column(Date)
+    dl_expiry_date = Column(Date)
 
     applied_designation_id = Column(Integer, ForeignKey("designations.id"), nullable=False)
     applied_employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=True)
@@ -1484,3 +1536,35 @@ class CandidateDocument(Base):
     candidate = relationship("Candidate", back_populates="documents")
     document_type_rel = relationship("DocumentType")
     uploaded_by = relationship("User")
+
+
+class CandidateChangeRequest(Base):
+    """Approval-workflow record for edits to (or a document deletion on)
+    an already-APPROVED Candidate - "approved data must not be
+    overwritten directly," the same principle blueprint §15 applies to an
+    ACTIVE EmploymentEpisode via ChangeRequest, ported here as a
+    dedicated table rather than widening the Module 1 ChangeRequest table
+    (whose episode_id column is NOT NULL and tightly coupled to
+    EmploymentEpisode). changes_json/previous_values_json hold a JSON
+    dict, same shape as ChangeRequest - for request_type=FIELD_CHANGE it's
+    field->value; for request_type=DOCUMENT_DELETE it's just
+    {"document_id": ...} (nothing to "apply" but the deletion itself, done
+    on approval - see recruitment_service.review_candidate_change_request)."""
+
+    __tablename__ = "candidate_change_requests"
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
+    request_type = Column(String(20), nullable=False)  # FIELD_CHANGE / DOCUMENT_DELETE
+    changes_json = Column(Text)
+    previous_values_json = Column(Text)
+    requested_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    review_remarks = Column(Text)
+    status = Column(String(20), default="PENDING")
+    created_at = Column(DateTime, default=now)
+
+    candidate = relationship("Candidate")
+    requested_by = relationship("User", foreign_keys=[requested_by_id])
+    reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])

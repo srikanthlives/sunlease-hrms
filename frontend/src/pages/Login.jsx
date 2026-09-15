@@ -37,7 +37,7 @@ export default function Login() {
           <p className="text-white/50 text-sm mt-1">Employee Data Management</p>
         </div>
         <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-card p-6 space-y-4">
-          <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required />
+          <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required noUppercase />
           <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}
           <Button type="submit" className="w-full" disabled={busy}>

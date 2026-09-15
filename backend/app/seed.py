@@ -80,9 +80,13 @@ try:
 
     if SEED_MODE == "full":
         if not db.query(Company).filter(Company.name == "Sunlease Renewables").first():
-            db.add(Company(name="Sunlease Renewables"))
+            db.add(Company(name="Sunlease Renewables", code="SUNLEASE"))
         db.flush()
         company = db.query(Company).filter(Company.name == "Sunlease Renewables").first()
+        if not company.code:
+            company.code = "SUNLEASE"
+            db.add(company)
+            db.flush()
 
         if not db.query(CostCenter).filter(CostCenter.code == "CC-PDY").first():
             db.add(CostCenter(company_id=company.id, name="Puducherry", code="CC-PDY"))
@@ -90,7 +94,7 @@ try:
         cost_center = db.query(CostCenter).filter(CostCenter.code == "CC-PDY").first()
 
         if not db.query(Department).filter(Department.code == "DEPT-OPS").first():
-            db.add(Department(cost_center_id=cost_center.id, name="Operations", code="DEPT-OPS"))
+            db.add(Department(name="Operations", code="DEPT-OPS"))
 
         for cat_name in ["Staff", "Worker", "Driver"]:
             if not db.query(EmployeeCategory).filter(EmployeeCategory.name == cat_name).first():

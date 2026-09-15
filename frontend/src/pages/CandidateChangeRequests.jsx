@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, StatusBadge, formatDateTime } from "../components/ui";
 
-export default function ChangeRequests() {
+export default function CandidateChangeRequests() {
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState(null);
   const [expanded, setExpanded] = useState({});
 
   function reload() {
-    client.get("/employees-change-requests").then((res) => setRows(res.data));
+    client.get("/recruitment/candidates-change-requests", { params: { status_: "PENDING" } }).then((res) => setRows(res.data));
   }
   useEffect(reload, []);
 
@@ -18,22 +20,12 @@ export default function ChangeRequests() {
     setExpanded((e) => ({ ...e, [id]: !e[id] }));
   }
 
-  async function previewDocument(id, which, fileName) {
-    const res = await client.get(`/employees-change-requests/${id}/preview`, { params: { which }, responseType: "blob" });
-    const url = URL.createObjectURL(res.data);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName || (which === "new" ? "new-document" : "old-document");
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   async function act(id, action) {
     setBusyId(id);
     setError("");
     try {
       const remarks = action === "reject" ? window.prompt("Reason for rejection (optional):") || "" : "";
-      await client.post(`/employees-change-requests/${id}/${action}`, { remarks });
+      await client.post(`/recruitment/candidates-change-requests/${id}/${action}`, { remarks });
       reload();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -45,15 +37,16 @@ export default function ChangeRequests() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-display font-semibold text-ink">Employee Change Requests</h1>
+        <h1 className="text-xl font-display font-semibold text-ink">Candidate Change Requests</h1>
         <p className="text-sm text-ink/50 mt-1">
-          Edits to an already-Active employee's identity/employment fields require approval (blueprint §15).
+          Edits to (or document deletions on) an already-Approved candidate require approval, same principle as an
+          Active employee's Change Requests.
         </p>
       </div>
       {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}
 
       <Card>
-        {rows.length === 0 && <div className="text-sm text-ink/40 py-10 text-center">No change requests.</div>}
+        {rows.length === 0 && <div className="text-sm text-ink/40 py-10 text-center">No pending change requests.</div>}
         <div className="space-y-3">
           {rows.map((r) => {
             const isOpen = !!expanded[r.id];
@@ -69,11 +62,10 @@ export default function ChangeRequests() {
                     </span>
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">
-                        Employee #{r.episode_id} — {r.transaction_type.replace(/_/g, " ")}
+                        {r.candidate_name} ({r.candidate_reference_number}) — {r.request_type.replace(/_/g, " ")}
                       </div>
                       <div className="text-xs text-ink/50 mt-0.5">
                         Requested by {r.requested_by || "—"} on {formatDateTime(r.created_at)}
-                        {r.reviewed_by && ` · Reviewed by ${r.reviewed_by}`}
                       </div>
                     </div>
                   </div>
@@ -81,15 +73,10 @@ export default function ChangeRequests() {
                 </button>
                 {isOpen && (
                   <div className="px-4 pb-4">
-                    {r.transaction_type === "DOCUMENT_CHANGE" ? (
-                      <div className="flex items-center gap-2 mb-2">
-                        <Button size="sm" variant="outline" onClick={() => previewDocument(r.id, "old", r.previous_values.old_file_name)}>
-                          Download Old Document ({r.previous_values.old_file_name || "—"})
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => previewDocument(r.id, "new", r.changes.new_file_name)}>
-                          Download New Document ({r.changes.new_file_name || "—"})
-                        </Button>
-                      </div>
+                    {r.request_type === "DOCUMENT_DELETE" ? (
+                      <p className="text-sm text-ink/70 mb-2">
+                        Requests deleting the uploaded <strong>{r.changes.document_type}</strong> document.
+                      </p>
                     ) : (
                       <table className="w-full text-xs mb-2">
                         <thead>
@@ -110,13 +97,11 @@ export default function ChangeRequests() {
                         </tbody>
                       </table>
                     )}
-                    {r.review_remarks && <div className="text-xs text-ink/50 mb-2">Remarks: {r.review_remarks}</div>}
-                    {r.status === "PENDING" && (
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="accent" onClick={() => act(r.id, "approve")} disabled={busyId === r.id}>Approve</Button>
-                        <Button size="sm" variant="danger" onClick={() => act(r.id, "reject")} disabled={busyId === r.id}>Reject</Button>
-                      </div>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" onClick={() => navigate(`/recruitment/candidates/${r.candidate_id}`)}>View Candidate</Button>
+                      <Button size="sm" variant="accent" onClick={() => act(r.id, "approve")} disabled={busyId === r.id}>Approve</Button>
+                      <Button size="sm" variant="danger" onClick={() => act(r.id, "reject")} disabled={busyId === r.id}>Reject</Button>
+                    </div>
                   </div>
                 )}
               </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
-import { Card, Button, Input, Select, Checkbox, StatusBadge, SectionDivider, formatDate, formatDateTime } from "../components/ui";
+import { Card, Button, Input, Select, Checkbox, StatusBadge, SectionDivider, formatAadhaar, formatDate, formatDateTime } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import EmployeeReviewSummary from "../components/EmployeeReviewSummary";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -288,8 +288,12 @@ export default function EmployeeProfile() {
 
             <SectionDivider>Identity Documents</SectionDivider>
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <Field label="Aadhaar" value={employee.aadhaar} />
-              <Field label="PAN" value={employee.pan} />
+              <Field label="Aadhaar Name" value={employee.aadhaar_name} />
+              <Field label="Aadhaar DOB" value={formatDate(employee.aadhaar_dob)} />
+              <Field label="Aadhaar Number" value={formatAadhaar(employee.aadhaar)} />
+              <Field label="PAN Name" value={employee.pan_name} />
+              <Field label="PAN DOB" value={formatDate(employee.pan_dob)} />
+              <Field label="PAN Number" value={employee.pan} />
             </div>
 
             <SectionDivider>Previous Experience</SectionDivider>

@@ -1,4 +1,4 @@
-import { SectionDivider, StatusBadge, formatDate } from "./ui";
+import { SectionDivider, StatusBadge, formatAadhaar, formatDate } from "./ui";
 
 // Read-only, single-scrollable-page summary of a full employee record —
 // used by EmployeeProfile's Overview tab. Mirrors the section list/layout
@@ -45,8 +45,12 @@ export default function EmployeeReviewSummary({ detail, onPreviewDocument }) {
 
       <SectionDivider>Identity Documents</SectionDivider>
       <div className="grid grid-cols-3 gap-3">
-        <Field label="Aadhaar" value={employee.aadhaar} />
-        <Field label="PAN" value={employee.pan} />
+        <Field label="Aadhaar Name" value={employee.aadhaar_name} />
+        <Field label="Aadhaar DOB" value={formatDate(employee.aadhaar_dob)} />
+        <Field label="Aadhaar Number" value={formatAadhaar(employee.aadhaar)} />
+        <Field label="PAN Name" value={employee.pan_name} />
+        <Field label="PAN DOB" value={formatDate(employee.pan_dob)} />
+        <Field label="PAN Number" value={employee.pan} />
       </div>
 
       <SectionDivider>Emergency Contact</SectionDivider>

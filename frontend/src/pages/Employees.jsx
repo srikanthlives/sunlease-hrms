@@ -2,13 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
-import { Card, Button, Input, Select, Table, StatusBadge, formatDate } from "../components/ui";
-import { useGlobalFilter } from "../context/GlobalFilterContext";
+import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, formatDate } from "../components/ui";
 
 const ALL_COLUMNS = [
-  { key: "employee_number", header: "Employee No.", sortable: true, defaultVisible: true, maxWidth: 140 },
+  {
+    key: "employee_number", header: "Employee No.", sortable: true, defaultVisible: true,
+    noTruncate: true, sticky: true, stickyWidth: 180,
+  },
   {
     key: "name", header: "Name", sortable: true, defaultVisible: true, noTruncate: true,
+    sticky: true, stickyWidth: 240,
     sortAccessor: (r) => `${r.last_name} ${r.first_name}`,
     render: (r) => `${r.first_name} ${r.last_name}`,
   },
@@ -16,9 +19,10 @@ const ALL_COLUMNS = [
   { key: "cost_center", header: "Cost Center", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.cost_center || "—" },
   { key: "department", header: "Department", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.department || "—" },
   { key: "status", header: "Status", sortable: true, defaultVisible: true, maxWidth: 140, render: (r) => <StatusBadge status={r.status} /> },
+  { key: "date_of_joining", header: "Date of Joining", sortable: true, defaultVisible: true, maxWidth: 130, tooltip: (r) => formatDate(r.date_of_joining), render: (r) => formatDate(r.date_of_joining) },
+  { key: "separation_date", header: "Exit Date", sortable: true, defaultVisible: true, maxWidth: 130, tooltip: (r) => formatDate(r.separation_date), render: (r) => formatDate(r.separation_date) },
   { key: "employment_type", header: "Employment Type", sortable: true, defaultVisible: false, maxWidth: 150, render: (r) => r.employment_type || "—" },
   { key: "employee_category", header: "Category", sortable: true, defaultVisible: false, maxWidth: 130, render: (r) => r.employee_category || "—" },
-  { key: "date_of_joining", header: "Date of Joining", sortable: true, defaultVisible: false, maxWidth: 130, tooltip: (r) => formatDate(r.date_of_joining), render: (r) => formatDate(r.date_of_joining) },
   { key: "work_location", header: "Work Location", sortable: true, defaultVisible: false, maxWidth: 170, render: (r) => r.work_location || "—" },
   { key: "gender", header: "Gender", sortable: true, defaultVisible: false, maxWidth: 100, render: (r) => r.gender || "—" },
   { key: "mobile_number", header: "Mobile", sortable: true, defaultVisible: false, maxWidth: 130, render: (r) => r.mobile_number || "—" },
@@ -32,7 +36,7 @@ const STATUS_OPTIONS = ["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "SUSP
 // AttendanceRegister.jsx's summary view "_actions" column pattern).
 function makeActionsColumn(navigate, onDelete) {
   return {
-    key: "_actions", header: "", align: "right", width: "8%",
+    key: "_actions", header: "", align: "right",
     render: (r) => (
       <div className="flex gap-1.5 justify-end">
         <Button
@@ -54,7 +58,10 @@ function makeActionsColumn(navigate, onDelete) {
   };
 }
 
-const VISIBLE_COLUMNS_KEY = "hrms_employees_visible_columns";
+// Bumped (v2) so everyone picks up the new Date of Joining/Exit Date
+// defaults below, instead of an already-saved column set silently
+// hiding them forever.
+const VISIBLE_COLUMNS_KEY = "hrms_employees_visible_columns_v2";
 
 function loadVisibleColumns() {
   try {
@@ -72,7 +79,6 @@ function uniqueValues(rows, key) {
 
 export default function Employees() {
   const navigate = useNavigate();
-  const { year, month, costCenterId } = useGlobalFilter();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -86,20 +92,24 @@ export default function Employees() {
   const [bulkError, setBulkError] = useState("");
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  // Defaults to ACTIVE - the list otherwise used to be scoped by the
+  // shared Month+Cost Center global filter (a proxy for "current"
+  // employees); that's gone now, so this status default does the same
+  // job directly and explicitly.
+  const [statusFilter, setStatusFilter] = useState("ACTIVE");
   const [costCenterFilter, setCostCenterFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   function reload() {
     setLoading(true);
-    const params = { year, month };
-    if (costCenterId) params.cost_center_id = costCenterId;
-    client.get("/employees", { params }).then((res) => setRows(res.data)).finally(() => setLoading(false));
+    client.get("/employees").then((res) => setRows(res.data)).finally(() => setLoading(false));
   }
 
-  useEffect(reload, [year, month, costCenterId]);
+  useEffect(reload, []);
 
   useEffect(() => {
     localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify([...visibleColumns]));
@@ -207,6 +217,9 @@ export default function Employees() {
     });
   }, [rows, search, statusFilter, costCenterFilter, departmentFilter, employmentTypeFilter, categoryFilter]);
 
+  useEffect(() => setPage(1), [search, statusFilter, costCenterFilter, departmentFilter, employmentTypeFilter, categoryFilter]);
+  const { pageRows, page: safePage, pageCount, total } = usePagination(filteredRows, page, pageSize);
+
   const columns = [...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)), makeActionsColumn(navigate, deleteEmployee)];
   const filtersActive = search || statusFilter || costCenterFilter || departmentFilter || employmentTypeFilter || categoryFilter;
 
@@ -302,14 +315,21 @@ export default function Employees() {
         {loading ? (
           <div className="text-sm text-ink/40 py-10 text-center">Loading…</div>
         ) : (
-          <Table
-            columns={columns}
-            rows={filteredRows}
-            keyField="episode_id"
-            empty={rows.length === 0 ? "No employees yet." : "No employees match the current filters."}
-            onRowClick={(r) => navigate(`/employees/${r.episode_id}`)}
-            singleLine
-          />
+          <>
+            <Table
+              columns={columns}
+              rows={pageRows}
+              keyField="episode_id"
+              empty={rows.length === 0 ? "No employees yet." : "No employees match the current filters."}
+              onRowClick={(r) => navigate(`/employees/${r.episode_id}`)}
+              singleLine
+              stickyHeader
+            />
+            <Pagination
+              page={safePage} pageCount={pageCount} total={total} pageSize={pageSize}
+              onPageChange={setPage} onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+            />
+          </>
         )}
       </Card>
 

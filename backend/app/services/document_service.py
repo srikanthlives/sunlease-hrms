@@ -138,6 +138,18 @@ def save_candidate_document(db: Session, candidate: Candidate, document_type_id:
     return record
 
 
+def delete_candidate_document(db: Session, document: CandidateDocument) -> None:
+    """Removes both the DB row and the file it points at - "clean the
+    repository of deleted documents," not just the row that referenced
+    it. Used for both a direct (pre-approval) delete and an approved
+    CandidateChangeRequest's DOCUMENT_DELETE."""
+    if document.object_key:
+        path = os.path.join(settings.UPLOAD_DIR, document.object_key)
+        if os.path.exists(path):
+            os.remove(path)
+    db.delete(document)
+
+
 def copy_candidate_documents_to_episode(db: Session, candidate: Candidate, episode: EmploymentEpisode, actor: User) -> None:
     """Conversion-time: copies each of the candidate's uploaded documents
     into a DocumentMeta row for the new episode, physically copying the

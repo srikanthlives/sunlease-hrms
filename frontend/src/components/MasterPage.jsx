@@ -117,7 +117,7 @@ export default function MasterPage({ title, description, resource, fields, idFie
   }
 
   const columns = [
-    ...fields.map((f) => ({
+    ...fields.filter((f) => !f.hideInTable).map((f) => ({
       key: f.name,
       header: f.label,
       render: (row) => {
@@ -159,7 +159,7 @@ export default function MasterPage({ title, description, resource, fields, idFie
 
       <Card>
         <h2 className="text-sm font-semibold text-ink mb-3">{editingId ? "Edit" : "New"}</h2>
-        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${fields.length}, minmax(0,1fr))` }}>
+        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(fields.length, 4)}, minmax(0,1fr))` }}>
           {fields.map((field) => {
             if (field.type === "select") {
               return (

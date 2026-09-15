@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -6,14 +8,14 @@ from app.core.deps import get_current_user, require_hr_admin, require_permission
 from app.db.session import get_db
 from app.models.enums import AuditAction, Permission
 from app.models.models import (
-    Candidate, CandidateDocument, CandidateSalaryComponent, CandidateStageResult,
+    Candidate, CandidateChangeRequest, CandidateDocument, CandidateSalaryComponent, CandidateStageResult,
     DesignationCriteria, SelectionCriteria, User,
 )
 from app.schemas.recruitment import (
-    CandidateIn, CandidateSalaryComponentIn, CandidateStageResultIn,
+    CandidateIn, CandidateSalaryComponentIn, CandidateStageResultIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, SelectionCriteriaIn,
 )
-from app.services import audit_service, document_service, recruitment_service
+from app.services import audit_service, document_service, licence_service, recruitment_service
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
 
@@ -122,6 +124,9 @@ def _candidate_summary_dict(c: Candidate) -> dict:
         "first_name": c.first_name, "last_name": c.last_name,
         "applied_designation_id": c.applied_designation_id, "designation_name": c.designation.name if c.designation else None,
         "applied_cost_center_id": c.applied_cost_center_id, "cost_center_name": c.cost_center.name if c.cost_center else None,
+        "applied_project_id": c.applied_project_id, "applied_project_name": c.project.name if c.project else None,
+        "applied_employee_category_id": c.applied_employee_category_id,
+        "applied_employee_category_name": c.employee_category.name if c.employee_category else None,
         "applied_date": c.applied_date, "status": c.status,
         "mobile_number": c.mobile_number,
     }
@@ -137,10 +142,12 @@ def _candidate_detail_dict(db: Session, c: Candidate) -> dict:
         "current_designation": c.current_designation, "current_company_name": c.current_company_name,
         "current_company_details": c.current_company_details, "current_date_of_joining": c.current_date_of_joining,
         "total_experience_years": c.total_experience_years,
-        "aadhaar": c.aadhaar,
-        "applied_employee_category_id": c.applied_employee_category_id,
-        "applied_employee_category_name": c.employee_category.name if c.employee_category else None,
-        "applied_project_id": c.applied_project_id, "applied_project_name": c.project.name if c.project else None,
+        "aadhaar": c.aadhaar, "aadhaar_name": c.aadhaar_name, "aadhaar_dob": c.aadhaar_dob,
+        "pan": c.pan, "pan_name": c.pan_name, "pan_dob": c.pan_dob,
+        "dl_licence_number": c.dl_licence_number, "dl_badge_number": c.dl_badge_number,
+        "dl_vehicle_class": c.dl_vehicle_class, "dl_issuing_authority": c.dl_issuing_authority,
+        "dl_issue_date": c.dl_issue_date, "dl_expiry_date": c.dl_expiry_date,
+        "driving_licence_requirement": licence_service.resolve_driving_licence_requirement_for_candidate(db, c),
         "source": c.source, "remarks": c.remarks,
         "converted_employee_id": c.converted_employee_id, "converted_episode_id": c.converted_episode_id,
         "criteria_status": recruitment_service.criteria_status(db, c),
@@ -179,10 +186,11 @@ def list_candidates(status_: str | None = None, designation_id: int | None = Non
 
 @router.post("/candidates", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
 def create_candidate(payload: CandidateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    recruitment_service.validate_unique_identifiers(db, payload.aadhaar, payload.pan, payload.dl_licence_number)
     candidate = Candidate(**payload.model_dump())
     db.add(candidate)
     db.flush()
-    candidate.reference_number = recruitment_service.generate_reference_number(db, candidate.id)
+    candidate.reference_number = recruitment_service.generate_reference_number(db, candidate)
     db.add(candidate)
     audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.CREATE, user, new_value=candidate.reference_number)
     db.commit()
@@ -197,27 +205,63 @@ def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
 
 @router.put("/candidates/{candidate_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
 def update_candidate(candidate_id: int, payload: CandidateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Direct-applies while the candidate is Applied/Pending Approval/
+    Rejected; once APPROVED, queues a CandidateChangeRequest instead (see
+    recruitment_service.save_or_request_candidate_update) - only fields
+    that actually changed are included, so a resubmitted form with
+    untouched fields doesn't manufacture a change request out of nothing."""
     candidate = _get_candidate(db, candidate_id)
     if candidate.status == "CONVERTED":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
-    for field, value in payload.model_dump().items():
-        setattr(candidate, field, value)
-    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user)
+    recruitment_service.validate_unique_identifiers(db, payload.aadhaar, payload.pan, payload.dl_licence_number, exclude_candidate_id=candidate.id)
+    changes = {
+        field: value for field, value in payload.model_dump().items()
+        if getattr(candidate, field) != value
+    }
+    result = recruitment_service.save_or_request_candidate_update(db, candidate, changes, user)
     db.commit()
     db.refresh(candidate)
-    return _candidate_detail_dict(db, candidate)
+    return {**_candidate_detail_dict(db, candidate), **result}
 
 
-@router.post("/candidates/{candidate_id}/reject", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
-def reject_candidate(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+@router.post("/candidates/{candidate_id}/disqualify", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def disqualify_candidate(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Terminal rejection - this candidate is out of consideration
+    entirely (distinct from /reject below, which just sends a
+    Pending-Approval submission back to Applied for correction)."""
     candidate = _get_candidate(db, candidate_id)
-    if candidate.status == "CONVERTED":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
-    candidate.status = "REJECTED"
-    db.add(candidate)
-    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="REJECTED")
+    recruitment_service.disqualify_candidate(db, candidate, user)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/candidates/{candidate_id}/submit", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def submit_candidate(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    candidate = _get_candidate(db, candidate_id)
+    recruitment_service.submit_candidate(db, candidate, user)
+    db.commit()
+    return {"ok": True, "status": candidate.status}
+
+
+@router.post("/candidates/{candidate_id}/approve")
+def approve_candidate_submission(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Grants the initial approval a candidate needs before Selection
+    Criteria can be recorded - routed through the same ApprovalRule
+    engine as Employee creation (no permission dependency here, same as
+    employees.py's own /approve: authorization is entirely inside
+    recruitment_service.approve_candidate_submission)."""
+    candidate = _get_candidate(db, candidate_id)
+    recruitment_service.approve_candidate_submission(db, candidate, user)
+    db.commit()
+    return {"ok": True, "status": candidate.status}
+
+
+@router.post("/candidates/{candidate_id}/reject")
+def reject_candidate_submission(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    candidate = _get_candidate(db, candidate_id)
+    recruitment_service.return_candidate_for_correction(db, candidate, user)
+    db.commit()
+    return {"ok": True, "status": candidate.status}
 
 
 @router.delete("/candidates/{candidate_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
@@ -225,6 +269,8 @@ def delete_candidate(candidate_id: int, db: Session = Depends(get_db), user: Use
     candidate = _get_candidate(db, candidate_id)
     if candidate.status == "CONVERTED":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A converted candidate cannot be deleted")
+    for doc in list(candidate.documents):
+        document_service.delete_candidate_document(db, doc)
     db.delete(candidate)
     audit_service.record(db, "CANDIDATE", candidate_id, AuditAction.UPDATE, user, old_value="deleted")
     db.commit()
@@ -283,23 +329,6 @@ def set_candidate_salary(candidate_id: int, payload: list[CandidateSalaryCompone
     audit_service.record(db, "CANDIDATE_SALARY", candidate.id, AuditAction.UPDATE, user)
     db.commit()
     return _candidate_detail_dict(db, _get_candidate(db, candidate_id))
-
-
-@router.post("/candidates/{candidate_id}/approve", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
-def approve_candidate(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """Approves a candidate once every mandatory selection criteria has
-    passed. This only marks the candidate APPROVED - the Employee/Episode
-    itself (in DRAFT status) is created by the separate Convert to
-    Employee step below, which still needs an Employee Number and Date of
-    Joining."""
-    candidate = _get_candidate(db, candidate_id)
-    if not recruitment_service.all_mandatory_passed(db, candidate):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has not passed all mandatory selection criteria yet")
-    candidate.status = "APPROVED"
-    db.add(candidate)
-    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="APPROVED")
-    db.commit()
-    return {"ok": True}
 
 
 @router.post("/candidates/{candidate_id}/convert", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
@@ -364,9 +393,78 @@ def download_candidate_document(candidate_id: int, document_id: int, db: Session
 
 @router.delete("/candidates/{candidate_id}/documents/{document_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
 def delete_candidate_document(candidate_id: int, document_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Deletes the file from disk as well as the DB row - "clean the
+    repository of deleted documents" (document_service.delete_candidate_document)
+    - unless the candidate is already APPROVED, in which case the
+    deletion is queued as a CandidateChangeRequest instead and only takes
+    effect once an approver reviews it."""
     candidate = _get_candidate(db, candidate_id)
+    if candidate.status == "CONVERTED":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
     doc = _get_candidate_document(db, candidate, document_id)
-    db.delete(doc)
+
+    if candidate.status == "APPROVED":
+        recruitment_service.create_candidate_change_request(db, candidate, "DOCUMENT_DELETE", {"document_id": doc.id, "document_type": doc.document_type}, user)
+        db.commit()
+        return {"ok": True, "submitted_for_approval": True}
+
+    document_service.delete_candidate_document(db, doc)
     audit_service.record(db, "CANDIDATE_DOCUMENT", candidate.id, AuditAction.UPDATE, user, old_value=f"removed {doc.document_type}")
+    db.commit()
+    return {"ok": True, "submitted_for_approval": False}
+
+
+# ---------------------------------------------------------------------------
+# Candidate change requests - edits/document-deletions queued while a
+# candidate is APPROVED (recruitment_service.save_or_request_candidate_update,
+# .create_candidate_change_request). Review authorization is the same
+# ApprovalRule routing as the initial candidate approval, via
+# recruitment_service.review_candidate_change_request.
+# ---------------------------------------------------------------------------
+
+def _change_request_dict(r: CandidateChangeRequest) -> dict:
+    return {
+        "id": r.id, "candidate_id": r.candidate_id,
+        "candidate_reference_number": r.candidate.reference_number if r.candidate else None,
+        "candidate_name": f"{r.candidate.first_name} {r.candidate.last_name}" if r.candidate else None,
+        "request_type": r.request_type,
+        "changes": json.loads(r.changes_json) if r.changes_json else {},
+        "previous_values": json.loads(r.previous_values_json) if r.previous_values_json else {},
+        "requested_by": r.requested_by.username if r.requested_by else None,
+        "reviewed_by": r.reviewed_by.username if r.reviewed_by else None,
+        "reviewed_at": r.reviewed_at,
+        "review_remarks": r.review_remarks,
+        "status": r.status,
+        "created_at": r.created_at,
+    }
+
+
+@router.get("/candidates-change-requests", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
+def list_candidate_change_requests(status_: str | None = Query("PENDING"), candidate_id: int | None = None, db: Session = Depends(get_db)):
+    query = db.query(CandidateChangeRequest)
+    if status_:
+        query = query.filter(CandidateChangeRequest.status == status_)
+    if candidate_id is not None:
+        query = query.filter(CandidateChangeRequest.candidate_id == candidate_id)
+    rows = query.order_by(CandidateChangeRequest.created_at.desc()).all()
+    return [_change_request_dict(r) for r in rows]
+
+
+@router.post("/candidates-change-requests/{request_id}/approve")
+def approve_candidate_change_request(request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    request = db.query(CandidateChangeRequest).filter(CandidateChangeRequest.id == request_id).first()
+    if not request:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Change request not found")
+    recruitment_service.review_candidate_change_request(db, request, user, approve=True)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/candidates-change-requests/{request_id}/reject")
+def reject_candidate_change_request(request_id: int, payload: ChangeRequestReviewIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    request = db.query(CandidateChangeRequest).filter(CandidateChangeRequest.id == request_id).first()
+    if not request:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Change request not found")
+    recruitment_service.review_candidate_change_request(db, request, user, approve=False, remarks=payload.remarks)
     db.commit()
     return {"ok": True}

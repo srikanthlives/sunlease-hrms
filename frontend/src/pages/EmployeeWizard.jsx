@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
-import { Card, Button, Input, Select, Checkbox, SectionDivider, StatusBadge, formatDate } from "../components/ui";
+import { Card, Button, Input, Select, Checkbox, SectionDivider, StatusBadge, formatAadhaar, formatDate } from "../components/ui";
 
 // Driving Licence is inserted before Review & Submit only when a
 // DrivingLicenceRequirement rule matches this employee's Employee Type/
@@ -453,16 +453,24 @@ export default function EmployeeWizard() {
             </div>
 
             <SectionDivider>Identity Documents</SectionDivider>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-ink/40 mb-2">Aadhaar</div>
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <Input label="Name (as on Aadhaar)" value={personal.aadhaar_name || ""} onChange={(e) => setPersonal({ ...personal, aadhaar_name: e.target.value })} />
+              <Input label="Date of Birth (as on Aadhaar)" type="date" value={personal.aadhaar_dob || ""} onChange={(e) => setPersonal({ ...personal, aadhaar_dob: e.target.value })} />
               <Input
-                label="Aadhaar"
-                value={personal.aadhaar || ""}
-                maxLength={12}
-                onChange={(e) => setPersonal({ ...personal, aadhaar: e.target.value.replace(/\D/g, "") })}
+                label="Aadhaar Number"
+                value={formatAadhaar(personal.aadhaar)}
+                maxLength={14}
+                onChange={(e) => setPersonal({ ...personal, aadhaar: e.target.value.replace(/\D/g, "").slice(0, 12) })}
                 error={formatError(personal.aadhaar, AADHAAR_REGEX, "Must be 12 digits, not starting with 0 or 1")}
               />
+            </div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-ink/40 mb-2">PAN</div>
+            <div className="grid grid-cols-3 gap-4">
+              <Input label="Name (as on PAN)" value={personal.pan_name || ""} onChange={(e) => setPersonal({ ...personal, pan_name: e.target.value })} />
+              <Input label="Date of Birth (as on PAN)" type="date" value={personal.pan_dob || ""} onChange={(e) => setPersonal({ ...personal, pan_dob: e.target.value })} />
               <Input
-                label="PAN"
+                label="PAN Number"
                 value={personal.pan || ""}
                 maxLength={10}
                 onChange={(e) => setPersonal({ ...personal, pan: e.target.value.toUpperCase() })}
@@ -538,13 +546,20 @@ export default function EmployeeWizard() {
               <option value="">Select...</option>
               {masters.employeeTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </Select>
-            <Select label="Employee Category" value={employment.employee_category_id || ""} onChange={(e) => setEmployment({ ...employment, employee_category_id: e.target.value ? Number(e.target.value) : null })}>
+            <Select label="Employee Category" value={employment.employee_category_id || ""} onChange={(e) => {
+              const nextCategoryId = e.target.value ? Number(e.target.value) : null;
+              const currentDesignation = masters.designations.find((d) => d.id === employment.designation_id);
+              const keepDesignation = currentDesignation && currentDesignation.employee_category_id === nextCategoryId;
+              setEmployment({ ...employment, employee_category_id: nextCategoryId, designation_id: keepDesignation ? employment.designation_id : null });
+            }}>
               <option value="">Select...</option>
               {masters.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
             <Select label="Designation" value={employment.designation_id || ""} onChange={(e) => setEmployment({ ...employment, designation_id: e.target.value ? Number(e.target.value) : null })}>
               <option value="">Select...</option>
-              {masters.designations.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {masters.designations
+                .filter((d) => !employment.employee_category_id || d.employee_category_id === employment.employee_category_id || d.id === employment.designation_id)
+                .map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </Select>
             <Select label="Work Location" value={employment.work_location_id || ""} onChange={(e) => setEmployment({ ...employment, work_location_id: e.target.value ? Number(e.target.value) : null })}>
               <option value="">Select...</option>
@@ -980,8 +995,12 @@ export default function EmployeeWizard() {
 
             <SectionDivider>Identity Documents</SectionDivider>
             <div className="grid grid-cols-3 gap-3">
-              <Field label="Aadhaar" value={personal.aadhaar} />
-              <Field label="PAN" value={personal.pan} />
+              <Field label="Aadhaar Name" value={personal.aadhaar_name} />
+              <Field label="Aadhaar DOB" value={formatDate(personal.aadhaar_dob)} />
+              <Field label="Aadhaar Number" value={formatAadhaar(personal.aadhaar)} />
+              <Field label="PAN Name" value={personal.pan_name} />
+              <Field label="PAN DOB" value={formatDate(personal.pan_dob)} />
+              <Field label="PAN Number" value={personal.pan} />
             </div>
 
             <SectionDivider>Emergency Contact</SectionDivider>

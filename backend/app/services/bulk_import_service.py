@@ -207,6 +207,18 @@ def _cell_str(value) -> str | None:
     return text or None
 
 
+def _cell_str_upper(value) -> str | None:
+    """Same as _cell_str, but uppercased - used for text fields that get
+    stored directly on a model (names, addresses, remarks, etc.), matching
+    the same "everything in capital letters" convention the manual entry
+    forms already apply (frontend/src/components/ui.jsx::Input). NOT used
+    for values passed to _lookup() (master data names are matched
+    case-sensitively against Organization Setup, which isn't necessarily
+    all-uppercase) or for email addresses (case can be meaningful)."""
+    text = _cell_str(value)
+    return text.upper() if text else None
+
+
 def _cell_date(value) -> date | None:
     if value is None or value == "":
         return None
@@ -266,6 +278,9 @@ _PERSONAL_STR_FIELDS = (
     "emergency_contact_relationship", "emergency_contact_mobile",
     "previous_designation", "previous_company_name", "previous_company_details",
 )
+# Case is meaningful for these - never uppercased, unlike the rest of
+# _PERSONAL_STR_FIELDS (see _cell_str_upper).
+_NO_UPPERCASE_FIELDS = {"personal_email", "official_email"}
 _PERSONAL_DATE_FIELDS = ("date_of_birth", "previous_date_of_joining")
 
 # Employment fields (EmploymentEpisode model) - excludes employee_number,
@@ -276,7 +291,7 @@ _EMPLOYMENT_DATE_FIELDS = ("date_of_joining", "confirmation_date")
 def _build_personal_changes(db: Session, data: dict) -> dict:
     changes = {}
     for field in _PERSONAL_STR_FIELDS:
-        value = _cell_str(data.get(field))
+        value = _cell_str(data.get(field)) if field in _NO_UPPERCASE_FIELDS else _cell_str_upper(data.get(field))
         if value is not None:
             changes[field] = value
     for field in _PERSONAL_DATE_FIELDS:
@@ -309,7 +324,7 @@ def _build_employment_changes(db: Session, data: dict) -> dict:
     work_location = _lookup(db, WorkLocation, _cell_str(data.get("work_location")))
     if work_location:
         changes["work_location_id"] = work_location.id
-    shift_group = _cell_str(data.get("shift_group"))
+    shift_group = _cell_str_upper(data.get("shift_group"))
     if shift_group is not None:
         changes["shift_group"] = shift_group
     for field in _EMPLOYMENT_DATE_FIELDS:
@@ -333,7 +348,7 @@ def _update_existing_row(db: Session, episode: EmploymentEpisode, data: dict, ac
     employment_changes = _build_employment_changes(db, data)
     employment_applied = _apply_or_request(db, episode, TransactionType.EMPLOYMENT_CHANGE, employment_changes, actor)
 
-    present_fields = {f: _cell_str(data.get(f"present_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
+    present_fields = {f: _cell_str_upper(data.get(f"present_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
     if any(present_fields.values()):
         row = db.query(Address).filter(Address.employee_id == employee.id, Address.address_type == AddressType.PRESENT).first()
         if not row:
@@ -344,7 +359,7 @@ def _update_existing_row(db: Session, episode: EmploymentEpisode, data: dict, ac
         db.add(row)
 
     same_as_present = (_cell_str(data.get("same_as_present")) or "").upper() in ("YES", "Y", "TRUE", "1")
-    permanent_fields = present_fields if same_as_present else {f: _cell_str(data.get(f"permanent_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
+    permanent_fields = present_fields if same_as_present else {f: _cell_str_upper(data.get(f"permanent_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
     if any(permanent_fields.values()):
         row = db.query(Address).filter(Address.employee_id == employee.id, Address.address_type == AddressType.PERMANENT).first()
         if not row:
@@ -404,9 +419,9 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
             if key:
                 data[key] = value
 
-        employee_number = _cell_str(data.get("employee_number"))
-        first_name = _cell_str(data.get("first_name"))
-        last_name = _cell_str(data.get("last_name"))
+        employee_number = _cell_str_upper(data.get("employee_number"))
+        first_name = _cell_str_upper(data.get("first_name"))
+        last_name = _cell_str_upper(data.get("last_name"))
 
         if not employee_number or not first_name or not last_name:
             errors.append({"row": row_number, "message": "Employee Number, First Name and Last Name are required"})
@@ -432,28 +447,28 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
                 pan = validate_pan(pan)
 
             employee = Employee(
-                first_name=first_name, middle_name=_cell_str(data.get("middle_name")), last_name=last_name,
-                father_husband_name=_cell_str(data.get("father_husband_name")),
-                gender=_cell_str(data.get("gender")), date_of_birth=_cell_date(data.get("date_of_birth")),
-                marital_status=_cell_str(data.get("marital_status")),
-                educational_qualification=_cell_str(data.get("educational_qualification")),
+                first_name=first_name, middle_name=_cell_str_upper(data.get("middle_name")), last_name=last_name,
+                father_husband_name=_cell_str_upper(data.get("father_husband_name")),
+                gender=_cell_str_upper(data.get("gender")), date_of_birth=_cell_date(data.get("date_of_birth")),
+                marital_status=_cell_str_upper(data.get("marital_status")),
+                educational_qualification=_cell_str_upper(data.get("educational_qualification")),
                 mobile_number=_cell_str(data.get("mobile_number")),
                 alternate_mobile_number=_cell_str(data.get("alternate_mobile_number")),
                 personal_email=_cell_str(data.get("personal_email")), official_email=_cell_str(data.get("official_email")),
                 aadhaar=aadhaar, pan=pan,
-                emergency_contact_name=_cell_str(data.get("emergency_contact_name")),
-                emergency_contact_relationship=_cell_str(data.get("emergency_contact_relationship")),
+                emergency_contact_name=_cell_str_upper(data.get("emergency_contact_name")),
+                emergency_contact_relationship=_cell_str_upper(data.get("emergency_contact_relationship")),
                 emergency_contact_mobile=_cell_str(data.get("emergency_contact_mobile")),
-                previous_designation=_cell_str(data.get("previous_designation")),
-                previous_company_name=_cell_str(data.get("previous_company_name")),
-                previous_company_details=_cell_str(data.get("previous_company_details")),
+                previous_designation=_cell_str_upper(data.get("previous_designation")),
+                previous_company_name=_cell_str_upper(data.get("previous_company_name")),
+                previous_company_details=_cell_str_upper(data.get("previous_company_details")),
                 previous_date_of_joining=_cell_date(data.get("previous_date_of_joining")),
                 total_experience_years=_cell_float(data.get("total_experience_years")),
             )
             db.add(employee)
             db.flush()
 
-            present_fields = {f: _cell_str(data.get(f"present_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
+            present_fields = {f: _cell_str_upper(data.get(f"present_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
             if any(present_fields.values()):
                 db.add(Address(employee_id=employee.id, address_type=AddressType.PRESENT, **present_fields))
 
@@ -461,7 +476,7 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
             if same_as_present and any(present_fields.values()):
                 db.add(Address(employee_id=employee.id, address_type=AddressType.PERMANENT, **present_fields))
             else:
-                permanent_fields = {f: _cell_str(data.get(f"permanent_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
+                permanent_fields = {f: _cell_str_upper(data.get(f"permanent_{f}")) for f in ("line1", "line2", "city", "state", "pincode", "country")}
                 if any(permanent_fields.values()):
                     db.add(Address(employee_id=employee.id, address_type=AddressType.PERMANENT, **permanent_fields))
 
@@ -476,7 +491,7 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
                 employee_category_id=employee_category.id if employee_category else None,
                 designation_id=designation.id if designation else None,
                 work_location_id=work_location.id if work_location else None,
-                shift_group=_cell_str(data.get("shift_group")),
+                shift_group=_cell_str_upper(data.get("shift_group")),
                 date_of_joining=_cell_date(data.get("date_of_joining")),
                 confirmation_date=_cell_date(data.get("confirmation_date")),
             )
@@ -501,11 +516,11 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
                 db.add(StatutoryInfo(
                     episode_id=episode.id,
                     pf_eligible=_cell_bool(data.get("pf_eligible")),
-                    pf_name_on_file=_cell_str(data.get("pf_name_on_file")),
+                    pf_name_on_file=_cell_str_upper(data.get("pf_name_on_file")),
                     uan=_cell_str(data.get("uan")),
                     pf_effective_date=_cell_date(data.get("pf_effective_date")),
                     esi_eligible=_cell_bool(data.get("esi_eligible")),
-                    esi_name_on_file=_cell_str(data.get("esi_name_on_file")),
+                    esi_name_on_file=_cell_str_upper(data.get("esi_name_on_file")),
                     esi_number=_cell_str(data.get("esi_number")),
                     esi_mediclaim_number=_cell_str(data.get("esi_mediclaim_number")),
                     esi_effective_date=_cell_date(data.get("esi_effective_date")),
@@ -515,13 +530,13 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
                 ))
 
             bank_fields = {
-                "bank_name": _cell_str(data.get("bank_name")),
-                "branch": _cell_str(data.get("bank_branch")),
+                "bank_name": _cell_str_upper(data.get("bank_name")),
+                "branch": _cell_str_upper(data.get("bank_branch")),
                 "account_number": _cell_str(data.get("bank_account_number")),
                 "ifsc": validate_ifsc(_cell_str(data.get("bank_ifsc"))) if _cell_str(data.get("bank_ifsc")) else None,
-                "account_holder_name": _cell_str(data.get("bank_account_holder_name")),
-                "account_type": _cell_str(data.get("bank_account_type")),
-                "payment_mode": _cell_str(data.get("bank_payment_mode")),
+                "account_holder_name": _cell_str_upper(data.get("bank_account_holder_name")),
+                "account_type": _cell_str_upper(data.get("bank_account_type")),
+                "payment_mode": _cell_str_upper(data.get("bank_payment_mode")),
             }
             if any(bank_fields.values()):
                 db.add(BankAccount(
@@ -531,25 +546,25 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
                 ))
 
             for n in (1, 2, 3):
-                name = _cell_str(data.get(f"dependent_{n}_name"))
+                name = _cell_str_upper(data.get(f"dependent_{n}_name"))
                 if not name:
                     continue
                 db.add(Dependent(
                     episode_id=episode.id, name=name,
-                    relationship_type=_cell_str(data.get(f"dependent_{n}_relationship")),
+                    relationship_type=_cell_str_upper(data.get(f"dependent_{n}_relationship")),
                     date_of_birth=_cell_date(data.get(f"dependent_{n}_date_of_birth")),
                 ))
 
             for n in (1, 2, 3):
-                name = _cell_str(data.get(f"nominee_{n}_name"))
+                name = _cell_str_upper(data.get(f"nominee_{n}_name"))
                 if not name:
                     continue
                 mobile = _cell_str(data.get(f"nominee_{n}_mobile"))
                 db.add(Nominee(
                     episode_id=episode.id, name=name,
-                    relationship_type=_cell_str(data.get(f"nominee_{n}_relationship")),
+                    relationship_type=_cell_str_upper(data.get(f"nominee_{n}_relationship")),
                     date_of_birth=_cell_date(data.get(f"nominee_{n}_date_of_birth")),
-                    address=_cell_str(data.get(f"nominee_{n}_address")),
+                    address=_cell_str_upper(data.get(f"nominee_{n}_address")),
                     mobile=validate_mobile(mobile) if mobile else None,
                     percentage=_cell_float(data.get(f"nominee_{n}_percentage")),
                     nomination_type=_cell_str(data.get(f"nominee_{n}_nomination_type")),

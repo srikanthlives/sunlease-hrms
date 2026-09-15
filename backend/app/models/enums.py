@@ -104,19 +104,29 @@ class AuditAction:
 
 
 class CandidateStatus:
+    # Freely, directly editable - HR is still entering/correcting data.
     APPLIED = "APPLIED"
-    IN_PROGRESS = "IN_PROGRESS"
-    # Set once HR approves the candidate (all mandatory selection criteria
-    # passed) - conversion (recruitment_service.convert_to_employee) then
-    # creates the Employee/EmploymentEpisode in DRAFT status, same as any
-    # other new hire, ready to continue through the normal wizard/approval
-    # flow.
+    # Submitted for the initial approval an APPROVER/HR_ADMIN must grant
+    # before Selection Criteria can be recorded - mirrors EmploymentEpisode's
+    # DRAFT -> PENDING_APPROVAL -> ACTIVE cascade (routed through the same
+    # ApprovalRule-matching idea, see
+    # recruitment_service.authorize_candidate_approval).
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    # Set once that initial approval is granted. From here: Selection
+    # Criteria stage results can be recorded, and any further edit to the
+    # candidate's own details (or a document deletion) must go through a
+    # CandidateChangeRequest instead of applying directly - "approved data
+    # must not be overwritten directly," same principle as an ACTIVE
+    # EmploymentEpisode (blueprint §15).
     APPROVED = "APPROVED"
+    # Terminal - HR/Approver has disqualified this candidate outright (see
+    # /candidates/{id}/disqualify), distinct from PENDING_APPROVAL being
+    # sent back to APPLIED for correction (see /candidates/{id}/reject).
     REJECTED = "REJECTED"
     CONVERTED = "CONVERTED"
     WITHDRAWN = "WITHDRAWN"
 
-    ALL = [APPLIED, IN_PROGRESS, APPROVED, REJECTED, CONVERTED, WITHDRAWN]
+    ALL = [APPLIED, PENDING_APPROVAL, APPROVED, REJECTED, CONVERTED, WITHDRAWN]
 
 
 class CriteriaResult:
@@ -251,9 +261,15 @@ class TransactionType:
     # Module 3: Payroll (blueprint §23)
     PAYROLL_PROCESSING = "PAYROLL_PROCESSING"
 
+    # Module 5: Recruitment - initial candidate approval (gates Selection
+    # Criteria recording) and edits/document-deletions on an
+    # already-APPROVED candidate (recruitment_service.py).
+    RECRUITMENT_APPROVAL = "RECRUITMENT_APPROVAL"
+    RECRUITMENT_CHANGE = "RECRUITMENT_CHANGE"
+
     ALL = [
         EMPLOYEE_CREATION, IDENTITY_CHANGE, EMPLOYMENT_CHANGE, ORG_CHANGE,
         BANK_CHANGE, STATUTORY_CHANGE, SEPARATION, DOCUMENT_CHANGE,
         ATTENDANCE_CORRECTION, OVERTIME_APPROVAL, LEAVE_APPLICATION,
-        PAYROLL_PROCESSING,
+        PAYROLL_PROCESSING, RECRUITMENT_APPROVAL, RECRUITMENT_CHANGE,
     ]

@@ -11,6 +11,7 @@ from app.models.models import (
     Role, RolePermission, UserCostCenterScope, ApprovalRule, User,
     OrgAssignment, CostAllocation, EmploymentEpisode, HolidayCalendar,
     PayrollRun, PayslipCostSplit, ComplianceRecord, LeaveEligibilityRule,
+    DesignationCriteria, Candidate,
 )
 from app.schemas.masters import (
     CompanyIn, CompanyOut, CostCenterIn, CostCenterOut,
@@ -59,6 +60,8 @@ def list_companies(db: Session = Depends(get_db), user=Depends(get_current_user)
 def create_company(payload: CompanyIn, db: Session = Depends(get_db)):
     if db.query(Company).filter(Company.name == payload.name).first():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Company already exists")
+    if db.query(Company).filter(Company.code == payload.code).first():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Company code already in use")
     obj = Company(**payload.model_dump())
     db.add(obj)
     db.commit()
@@ -74,6 +77,9 @@ def update_company(company_id: int, payload: CompanyIn, db: Session = Depends(ge
     dupe = db.query(Company).filter(Company.name == payload.name, Company.id != company_id).first()
     if dupe:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Company already exists")
+    code_dupe = db.query(Company).filter(Company.code == payload.code, Company.id != company_id).first()
+    if code_dupe:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Company code already in use")
     for field, value in payload.model_dump().items():
         setattr(obj, field, value)
     db.add(obj)
@@ -146,7 +152,7 @@ def deactivate_cost_center(cost_center_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cost Center not found")
     return _delete_or_deactivate(db, obj, [
         (OrgAssignment, OrgAssignment.cost_center_id), (CostAllocation, CostAllocation.cost_center_id),
-        (Project, Project.cost_center_id), (Department, Department.cost_center_id),
+        (Project, Project.cost_center_id),
         (UserCostCenterScope, UserCostCenterScope.cost_center_id), (ApprovalRule, ApprovalRule.cost_center_id),
         (HolidayCalendar, HolidayCalendar.cost_center_id), (PayrollRun, PayrollRun.cost_center_id),
         (PayslipCostSplit, PayslipCostSplit.cost_center_id), (ComplianceRecord, ComplianceRecord.cost_center_id),
@@ -320,6 +326,7 @@ def deactivate_category(category_id: int, db: Session = Depends(get_db)):
         (EmploymentEpisode, EmploymentEpisode.employee_category_id), (ApprovalRule, ApprovalRule.employee_category_id),
         (DocumentRequirement, DocumentRequirement.employee_category_id),
         (LeaveEligibilityRule, LeaveEligibilityRule.employee_category_id),
+        (Designation, Designation.employee_category_id), (Candidate, Candidate.applied_employee_category_id),
     ])
 
 
@@ -432,6 +439,8 @@ def deactivate_designation(designation_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Designation not found")
     return _delete_or_deactivate(db, obj, [
         (EmploymentEpisode, EmploymentEpisode.designation_id), (DocumentRequirement, DocumentRequirement.designation_id),
+        (DrivingLicenceRequirement, DrivingLicenceRequirement.designation_id),
+        (DesignationCriteria, DesignationCriteria.designation_id), (Candidate, Candidate.applied_designation_id),
     ])
 
 

@@ -25,7 +25,11 @@ class PersonalInfoStep(BaseModel):
     emergency_contact_relationship: str | None = None
     emergency_contact_mobile: str | None = None
     aadhaar: str | None = None
+    aadhaar_name: str | None = None
+    aadhaar_dob: date | None = None
     pan: str | None = None
+    pan_name: str | None = None
+    pan_dob: date | None = None
 
     # Previous Experience (blueprint §12)
     previous_designation: str | None = None
@@ -54,7 +58,7 @@ class PersonalInfoStep(BaseModel):
     def _check_email(cls, v):
         return validate_email_format(v) if v else v
 
-    @field_validator("date_of_birth")
+    @field_validator("date_of_birth", "aadhaar_dob", "pan_dob")
     @classmethod
     def _check_dob_not_future(cls, v):
         if v and v > date.today():

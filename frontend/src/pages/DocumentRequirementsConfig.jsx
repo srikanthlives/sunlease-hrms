@@ -50,6 +50,14 @@ export default function DocumentRequirementsConfig() {
     { key: "employee_category", header: "Category (priority 2)", render: (r) => nameOf(categories, r.employee_category_id) },
     { key: "designation", header: "Designation (priority 3)", render: (r) => nameOf(designations, r.designation_id) },
     { key: "mandatory", header: "Mandatory", render: (r) => <StatusBadge status={r.is_mandatory ? "ACTIVE" : "INACTIVE"} /> },
+    {
+      key: "candidates", header: "Applies to Candidates?",
+      render: (r) => r.employee_type_id ? (
+        <span className="text-xs text-ink/40">No — Employee Type set</span>
+      ) : (
+        <span className="text-xs text-ok">Yes</span>
+      ),
+    },
     { key: "actions", header: "", render: (r) => <Button variant="danger" size="sm" onClick={() => removeRule(r.id)}>Remove</Button> },
   ];
 
@@ -58,9 +66,16 @@ export default function DocumentRequirementsConfig() {
       <div>
         <h1 className="text-xl font-display font-semibold text-ink">Document Configuration</h1>
         <p className="text-sm text-ink/50 mt-1">
-          Which documents the Employee Wizard requests, scoped by Employee Type / Category / Designation (blueprint §14).
-          When a document type has rules at more than one level for the same employee, <strong>Employee Type wins over Category, which wins over Designation</strong> —
-          leave a dimension blank to make the rule apply to everyone on that dimension.
+          Which documents the Employee Wizard requests <strong>and</strong> which documents a Candidate's page requests during
+          recruitment — same rules, scoped by Employee Type / Category / Designation (blueprint §14). When a document type has
+          rules at more than one level, <strong>Employee Type wins over Category, which wins over Designation</strong> — leave a
+          dimension blank to make the rule apply to everyone on that dimension.
+        </p>
+        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-2">
+          <strong>To configure for Candidates:</strong> leave Employee Type as "Any Employee Type" (a Candidate has no
+          Employee Type yet — that's only chosen at conversion — so a rule that specifies one <em>never</em> reaches
+          candidates, only employees post-conversion). Scope the rule by Category and/or Designation instead. The
+          "Applies to Candidates?" column below shows which existing rules will actually be seen during recruitment.
         </p>
       </div>
       {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}

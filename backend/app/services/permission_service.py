@@ -7,7 +7,7 @@ from app.models.models import RolePermission, UserCostCenterScope, User
 # employee.sensitive.view (blueprint §18 - field-level access). Nested
 # under "employee" (Aadhaar/PAN) vs top-level lists (bank/statutory) in
 # the /employees/{id} response shape - see routers/employees.py.
-SENSITIVE_EMPLOYEE_FIELDS = {"aadhaar", "pan"}
+SENSITIVE_EMPLOYEE_FIELDS = {"aadhaar", "aadhaar_name", "aadhaar_dob", "pan", "pan_name", "pan_dob"}
 SENSITIVE_BANK_FIELDS = {"account_number", "ifsc"}
 SENSITIVE_STATUTORY_FIELDS = {"uan", "esi_number", "esi_mediclaim_number"}
 SENSITIVE_LICENCE_FIELDS = {"licence_number", "badge_number"}

@@ -6,7 +6,10 @@ export default function CompaniesMaster() {
       title="Companies"
       description="One company can have multiple Cost Centers (blueprint §2)."
       resource="/companies"
-      fields={[{ name: "name", label: "Name", type: "text", required: true }]}
+      fields={[
+        { name: "name", label: "Name", type: "text", required: true },
+        { name: "code", label: "Code", type: "text", required: true },
+      ]}
     />
   );
 }

@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import os
 import re
 
@@ -6,12 +7,12 @@ from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.enums import AuditAction, CandidateStatus
+from app.models.enums import AuditAction, CandidateStatus, RoleName, TransactionType
 from app.models.models import (
-    Candidate, CandidateSalaryComponent, CandidateStageResult, DesignationCriteria,
-    Employee, EmploymentEpisode, SelectionCriteria, User,
+    Candidate, CandidateChangeRequest, CandidateDocument, CandidateSalaryComponent, CandidateStageResult,
+    DesignationCriteria, DrivingLicenceDetail, Employee, EmploymentEpisode, SelectionCriteria, User,
 )
-from app.services import audit_service, document_service, employee_service, payroll_service
+from app.services import approval_service, audit_service, document_service, employee_service, payroll_service
 
 
 def _slug(value: str) -> str:
@@ -19,8 +20,32 @@ def _slug(value: str) -> str:
     return value or "file"
 
 
-def generate_reference_number(db: Session, candidate_id: int) -> str:
-    return f"CAND-{candidate_id:05d}"
+def generate_reference_number(db: Session, candidate: Candidate) -> str:
+    """Company code / Cost Center code / Project code / sequence-within-
+    that-scope, e.g. "SUNLEASE/CC-PDY/PRJ-01/003". The Project segment is
+    omitted when the candidate has no applied_project_id (sequence then
+    counts within Company+Cost Center only). Falls back to "NA" for a
+    missing Company/Cost Center code (legacy rows created before those
+    columns were required) rather than raising - a reference number
+    should never block candidate creation."""
+    cost_center = candidate.cost_center
+    company = cost_center.company if cost_center else None
+    company_code = (company.code if company else None) or "NA"
+    cost_center_code = (cost_center.code if cost_center else None) or "NA"
+    project_code = candidate.project.code if candidate.project else None
+
+    scope_query = db.query(Candidate).filter(
+        Candidate.applied_cost_center_id == candidate.applied_cost_center_id,
+        Candidate.applied_project_id == candidate.applied_project_id,
+        Candidate.id != candidate.id,
+    )
+    sequence = scope_query.count() + 1
+
+    parts = [company_code, cost_center_code]
+    if project_code:
+        parts.append(project_code)
+    parts.append(f"{sequence:03d}")
+    return "/".join(parts)
 
 
 def required_criteria(db: Session, designation_id: int, cost_center_id: int | None) -> list[DesignationCriteria]:
@@ -69,10 +94,9 @@ def criteria_status(db: Session, candidate: Candidate) -> list[dict]:
 
 def check_aadhaar_duplicates(db: Session, aadhaar: str | None, exclude_candidate_id: int | None = None) -> list[str]:
     """Returns human-readable descriptions of any existing Employee or
-    other Candidate already carrying this Aadhaar number - a warning, not
-    a hard block (see Candidate.aadhaar's docstring): the same person
-    could legitimately be re-applying, or it could be a genuine
-    data-entry mistake HR needs to see and judge for itself."""
+    other Candidate already carrying this Aadhaar number - informational
+    only (used to annotate the candidate detail response), the actual
+    gate is validate_unique_identifiers below, called on create/update."""
     if not aadhaar:
         return []
     matches = []
@@ -84,6 +108,182 @@ def check_aadhaar_duplicates(db: Session, aadhaar: str | None, exclude_candidate
     for cand in query.all():
         matches.append(f"Candidate: {cand.first_name} {cand.last_name} ({cand.reference_number}, {cand.status})")
     return matches
+
+
+def _find_matches(db: Session, employee_query, candidate_query, exclude_candidate_id: int | None) -> list[str]:
+    matches = [f"Employee: {emp.first_name} {emp.last_name}" for emp in employee_query.all()]
+    if exclude_candidate_id:
+        candidate_query = candidate_query.filter(Candidate.id != exclude_candidate_id)
+    matches += [f"Candidate: {c.first_name} {c.last_name} ({c.reference_number}, {c.status})" for c in candidate_query.all()]
+    return matches
+
+
+def validate_unique_identifiers(
+    db: Session, aadhaar: str | None, pan: str | None, dl_licence_number: str | None,
+    exclude_candidate_id: int | None = None,
+) -> None:
+    """Hard-blocks creating/updating a candidate whose Aadhaar, PAN, or
+    Driving Licence Number matches an existing Employee or another
+    Candidate - unlike the informational aadhaar_duplicate_warning this
+    replaces, these three are treated as unique identifiers that can
+    never legitimately collide between two different people, so there's
+    nothing for HR to "judge" the way there might be for a name/mobile
+    match; the row is simply rejected."""
+    errors = []
+
+    if aadhaar:
+        matches = _find_matches(
+            db, db.query(Employee).filter(Employee.aadhaar == aadhaar),
+            db.query(Candidate).filter(Candidate.aadhaar == aadhaar), exclude_candidate_id,
+        )
+        if matches:
+            errors.append(f"Aadhaar Number already used by {matches[0]}")
+
+    if pan:
+        matches = _find_matches(
+            db, db.query(Employee).filter(Employee.pan == pan),
+            db.query(Candidate).filter(Candidate.pan == pan), exclude_candidate_id,
+        )
+        if matches:
+            errors.append(f"PAN Number already used by {matches[0]}")
+
+    if dl_licence_number:
+        employee_matches = [
+            f"Employee: {r.episode.employee.first_name} {r.episode.employee.last_name}"
+            for r in db.query(DrivingLicenceDetail).filter(DrivingLicenceDetail.licence_number == dl_licence_number).all()
+            if r.episode and r.episode.employee
+        ]
+        candidate_query = db.query(Candidate).filter(Candidate.dl_licence_number == dl_licence_number)
+        if exclude_candidate_id:
+            candidate_query = candidate_query.filter(Candidate.id != exclude_candidate_id)
+        candidate_matches = [f"Candidate: {c.first_name} {c.last_name} ({c.reference_number}, {c.status})" for c in candidate_query.all()]
+        matches = employee_matches + candidate_matches
+        if matches:
+            errors.append(f"Driving Licence Number already used by {matches[0]}")
+
+    if errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(errors))
+
+
+def authorize_candidate_approval(db: Session, user: User, candidate: Candidate, transaction_type: str = TransactionType.RECRUITMENT_APPROVAL) -> None:
+    """Same routing/fallback logic as approval_service.authorize_approval,
+    reimplemented standalone because that function takes an
+    EmploymentEpisode (for its Cost Center lookup via OrgAssignment) and a
+    Candidate has no episode - it already carries its own
+    applied_cost_center_id/applied_employee_category_id directly, so
+    approval_service.find_approval_rule (which only needs those two ids,
+    not an episode) is reused as-is."""
+    if user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
+        return
+    rule = approval_service.find_approval_rule(db, transaction_type, candidate.applied_cost_center_id, candidate.applied_employee_category_id)
+    if rule:
+        if rule.approver_user_id is not None:
+            if user.id != rule.approver_user_id:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Not the assigned approver for this record")
+            return
+        if user.role.name != rule.approver_role:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires role {rule.approver_role} to approve this record")
+        return
+    if user.role.name != RoleName.APPROVER:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Requires the Approver role (no approval rule matched)")
+
+
+def submit_candidate(db: Session, candidate: Candidate, user: User) -> None:
+    if candidate.status != CandidateStatus.APPLIED:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only an Applied candidate can be submitted for approval")
+    candidate.status = CandidateStatus.PENDING_APPROVAL
+    db.add(candidate)
+    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="PENDING_APPROVAL")
+
+
+def approve_candidate_submission(db: Session, candidate: Candidate, user: User) -> None:
+    if candidate.status != CandidateStatus.PENDING_APPROVAL:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a candidate Pending Approval can be approved")
+    authorize_candidate_approval(db, user, candidate)
+    candidate.status = CandidateStatus.APPROVED
+    db.add(candidate)
+    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="APPROVED")
+
+
+def return_candidate_for_correction(db: Session, candidate: Candidate, user: User) -> None:
+    """Sends a Pending-Approval candidate back to Applied so HR can fix
+    something before resubmitting - mirrors EmploymentEpisode's own
+    /reject (PENDING_APPROVAL -> DRAFT), distinct from disqualify_candidate
+    below, which is a terminal rejection of the candidate entirely."""
+    if candidate.status != CandidateStatus.PENDING_APPROVAL:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a candidate Pending Approval can be returned for correction")
+    authorize_candidate_approval(db, user, candidate)
+    candidate.status = CandidateStatus.APPLIED
+    db.add(candidate)
+    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="APPLIED (returned for correction)")
+
+
+def disqualify_candidate(db: Session, candidate: Candidate, user: User) -> None:
+    if candidate.status in (CandidateStatus.CONVERTED, CandidateStatus.REJECTED):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"This candidate is already {candidate.status}")
+    candidate.status = CandidateStatus.REJECTED
+    db.add(candidate)
+    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="REJECTED")
+
+
+def save_or_request_candidate_update(db: Session, candidate: Candidate, changes: dict, user: User) -> dict:
+    """Direct-apply unless the candidate is already APPROVED, in which
+    case the edit is queued as a CandidateChangeRequest instead - "approved
+    data must not be overwritten directly" (blueprint §15), same principle
+    as an ACTIVE EmploymentEpisode. `changes` should already be filtered
+    to only the fields that actually differ from the current row."""
+    if candidate.status == CandidateStatus.APPROVED:
+        create_candidate_change_request(db, candidate, "FIELD_CHANGE", changes, user)
+        return {"submitted_for_approval": True}
+    for field, value in changes.items():
+        setattr(candidate, field, value)
+    db.add(candidate)
+    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user)
+    return {"submitted_for_approval": False}
+
+
+def create_candidate_change_request(db: Session, candidate: Candidate, request_type: str, changes: dict, user: User) -> CandidateChangeRequest:
+    previous_values = {f: getattr(candidate, f) for f in changes} if request_type == "FIELD_CHANGE" else {}
+    request = CandidateChangeRequest(
+        candidate_id=candidate.id, request_type=request_type,
+        changes_json=json.dumps(changes, default=str),
+        previous_values_json=json.dumps(previous_values, default=str),
+        requested_by_id=user.id, status="PENDING",
+    )
+    db.add(request)
+    db.flush()
+    audit_service.record(db, "CANDIDATE_CHANGE_REQUEST", request.id, AuditAction.CREATE, user, new_value=request_type)
+    return request
+
+
+def review_candidate_change_request(db: Session, request: CandidateChangeRequest, user: User, approve: bool, remarks: str | None = None) -> CandidateChangeRequest:
+    if request.status != "PENDING":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This change request has already been reviewed")
+    candidate = request.candidate
+    authorize_candidate_approval(db, user, candidate, TransactionType.RECRUITMENT_CHANGE)
+
+    request.reviewed_by_id = user.id
+    request.reviewed_at = dt.datetime.utcnow()
+    request.review_remarks = remarks
+
+    if approve:
+        changes = json.loads(request.changes_json)
+        if request.request_type == "FIELD_CHANGE":
+            for field, value in changes.items():
+                setattr(candidate, field, value)
+            db.add(candidate)
+        elif request.request_type == "DOCUMENT_DELETE":
+            doc = db.query(CandidateDocument).filter(CandidateDocument.id == changes["document_id"]).first()
+            if doc:
+                document_service.delete_candidate_document(db, doc)
+        request.status = "APPROVED"
+        audit_service.record(db, "CANDIDATE_CHANGE_REQUEST", request.id, AuditAction.APPROVE, user, new_value=request.changes_json)
+    else:
+        request.status = "REJECTED"
+        audit_service.record(db, "CANDIDATE_CHANGE_REQUEST", request.id, AuditAction.REJECT, user, new_value=remarks)
+
+    db.add(request)
+    return request
 
 
 def all_mandatory_passed(db: Session, candidate: Candidate) -> bool:
@@ -98,6 +298,8 @@ def get_or_create_stage_result(db: Session, candidate: Candidate, criteria_id: i
     (save_stage_result_attachment) independently of / before the result
     itself is marked, e.g. uploading the test certificate first and
     marking PASS/FAIL afterward."""
+    if candidate.status != CandidateStatus.APPROVED:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Candidate must be approved before Selection Criteria can be recorded")
     if not db.query(SelectionCriteria).filter(SelectionCriteria.id == criteria_id).first():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Selection criteria not found")
     row = (
@@ -140,6 +342,8 @@ def stage_result_attachment_path(stage_result: CandidateStageResult) -> str:
 
 
 def record_stage_result(db: Session, candidate: Candidate, criteria_id: int, result: str, tested_on, remarks: str | None, user: User) -> CandidateStageResult:
+    if candidate.status != CandidateStatus.APPROVED:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Candidate must be approved before Selection Criteria can be recorded")
     criteria = db.query(SelectionCriteria).filter(SelectionCriteria.id == criteria_id).first()
     if not criteria:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Selection criteria not found")
@@ -156,10 +360,6 @@ def record_stage_result(db: Session, candidate: Candidate, criteria_id: int, res
     row.remarks = remarks
     row.reviewed_by_id = user.id
     db.add(row)
-
-    if candidate.status == CandidateStatus.APPLIED:
-        candidate.status = CandidateStatus.IN_PROGRESS
-        db.add(candidate)
     audit_service.record(db, "CANDIDATE_STAGE_RESULT", candidate.id, AuditAction.UPDATE, user, new_value=f"{criteria.name}={result}")
     return row
 
@@ -171,6 +371,8 @@ def convert_to_employee(
 ) -> EmploymentEpisode:
     if candidate.status == CandidateStatus.CONVERTED:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
+    if candidate.status != CandidateStatus.APPROVED:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Candidate must be approved before conversion to employee")
     if not all_mandatory_passed(db, candidate):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has not passed all mandatory selection criteria yet")
     if db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first():
@@ -181,7 +383,9 @@ def convert_to_employee(
         father_husband_name=candidate.father_husband_name, gender=candidate.gender, date_of_birth=candidate.date_of_birth,
         mobile_number=candidate.mobile_number, alternate_mobile_number=candidate.alternate_mobile_number,
         personal_email=candidate.personal_email, educational_qualification=candidate.educational_qualification,
-        total_experience_years=candidate.total_experience_years, aadhaar=candidate.aadhaar,
+        total_experience_years=candidate.total_experience_years,
+        aadhaar=candidate.aadhaar, aadhaar_name=candidate.aadhaar_name, aadhaar_dob=candidate.aadhaar_dob,
+        pan=candidate.pan, pan_name=candidate.pan_name, pan_dob=candidate.pan_dob,
         # The candidate's CURRENT employer at application time becomes
         # their PREVIOUS employer once they're hired here.
         previous_designation=candidate.current_designation, previous_company_name=candidate.current_company_name,
@@ -220,6 +424,16 @@ def convert_to_employee(
         )
 
     document_service.copy_candidate_documents_to_episode(db, candidate, episode, user)
+
+    if any([
+        candidate.dl_licence_number, candidate.dl_badge_number, candidate.dl_vehicle_class,
+        candidate.dl_issuing_authority, candidate.dl_issue_date, candidate.dl_expiry_date,
+    ]):
+        db.add(DrivingLicenceDetail(
+            episode_id=episode.id, licence_number=candidate.dl_licence_number, badge_number=candidate.dl_badge_number,
+            vehicle_class=candidate.dl_vehicle_class, issuing_authority=candidate.dl_issuing_authority,
+            issue_date=candidate.dl_issue_date, expiry_date=candidate.dl_expiry_date,
+        ))
 
     candidate.status = CandidateStatus.CONVERTED
     candidate.converted_employee_id = employee.id
