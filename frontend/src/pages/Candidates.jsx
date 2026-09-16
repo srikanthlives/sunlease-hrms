@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { X } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, Pagination, usePagination, formatAadhaar, formatDate } from "../components/ui";
 
@@ -113,6 +114,15 @@ export default function Candidates() {
     if (categoryFilter && String(c.applied_employee_category_id) !== categoryFilter) return false;
     return true;
   });
+
+  const filtersActive = search || statusFilter || costCenterFilter || projectFilter || categoryFilter;
+  function clearFilters() {
+    setSearch("");
+    setStatusFilter("");
+    setCostCenterFilter("");
+    setProjectFilter("");
+    setCategoryFilter("");
+  }
 
   useEffect(() => setPage(1), [search, statusFilter, costCenterFilter, projectFilter, categoryFilter]);
   const { pageRows, page: safePage, pageCount, total } = usePagination(visibleCandidates, page, pageSize);
@@ -263,12 +273,9 @@ export default function Candidates() {
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </div>
-          {(costCenterFilter || projectFilter || categoryFilter || search) && (
-            <Button
-              variant="ghost" size="sm"
-              onClick={() => { setSearch(""); setCostCenterFilter(""); setProjectFilter(""); setCategoryFilter(""); }}
-            >
-              Clear
+          {filtersActive && (
+            <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1">
+              <X size={14} /> Clear
             </Button>
           )}
         </div>
