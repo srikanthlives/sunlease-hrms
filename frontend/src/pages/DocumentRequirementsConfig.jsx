@@ -91,13 +91,20 @@ export default function DocumentRequirementsConfig() {
             <option value="">Any Employee Type</option>
             {employeeTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </Select>
-          <Select value={form.employee_category_id} onChange={(e) => setForm({ ...form, employee_category_id: e.target.value })}>
+          <Select value={form.employee_category_id} onChange={(e) => {
+            const nextCategoryId = e.target.value;
+            const currentDesignation = designations.find((d) => String(d.id) === String(form.designation_id));
+            const keepDesignation = currentDesignation && String(currentDesignation.employee_category_id) === String(nextCategoryId);
+            setForm({ ...form, employee_category_id: nextCategoryId, designation_id: keepDesignation ? form.designation_id : "" });
+          }}>
             <option value="">Any Category</option>
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
           <Select value={form.designation_id} onChange={(e) => setForm({ ...form, designation_id: e.target.value })}>
             <option value="">Any Designation</option>
-            {designations.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {designations
+              .filter((d) => !form.employee_category_id || String(d.employee_category_id) === String(form.employee_category_id) || String(d.id) === String(form.designation_id))
+              .map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </Select>
         </div>
         <Checkbox

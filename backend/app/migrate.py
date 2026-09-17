@@ -17,6 +17,7 @@ Also called automatically on every app startup (see app/main.py).
 """
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.schema import CreateTable
 
 from app.db.session import Base, engine
 import app.models  # noqa: F401  (ensures every model is registered on Base.metadata)
@@ -70,12 +71,47 @@ def _drop_departments_cost_center_id(target_engine: Engine, inspector, verbose: 
     return True
 
 
+def _tighten_candidates_employee_category_not_null(target_engine: Engine, inspector, verbose: bool) -> bool:
+    """One-off fixup: applied_employee_category_id on Candidate is now
+    mandatory (was optional). SQLite can't ALTER a column to add a NOT
+    NULL constraint in place, so this rebuilds the candidates table with
+    the model's current (correct) column definitions - via SQLAlchemy's
+    own CreateTable DDL, so it always matches models.py exactly rather
+    than a hand-duplicated CREATE TABLE that could drift out of sync -
+    copying every existing row unchanged. Idempotent: only runs while the
+    live column is still nullable. Safe because no existing candidate row
+    has a null Employee Category (unlike Project, which does have one
+    legacy row and so deliberately stays nullable at the DB level - see
+    the comment on Candidate.applied_project_id in models.py)."""
+    if "candidates" not in inspector.get_table_names():
+        return False
+    live_columns = {c["name"]: c for c in inspector.get_columns("candidates")}
+    if "applied_employee_category_id" not in live_columns or not live_columns["applied_employee_category_id"]["nullable"]:
+        return False
+
+    table = Base.metadata.tables["candidates"]
+    create_sql = str(CreateTable(table).compile(target_engine)).replace("CREATE TABLE candidates ", "CREATE TABLE candidates_new ", 1)
+    column_names = ", ".join(f'"{c.name}"' for c in table.columns)
+
+    with target_engine.begin() as conn:
+        conn.execute(text(create_sql))
+        conn.execute(text(f'INSERT INTO "candidates_new" ({column_names}) SELECT {column_names} FROM "candidates"'))
+        conn.execute(text('DROP TABLE "candidates"'))
+        conn.execute(text('ALTER TABLE "candidates_new" RENAME TO "candidates"'))
+
+    if verbose:
+        print("Rebuilt candidates table to make applied_employee_category_id required (no data lost).")
+    return True
+
+
 def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
     target_engine = target_engine or engine
     summary = {"tables_created": [], "columns_added": []}
 
     inspector = inspect(target_engine)
     _drop_departments_cost_center_id(target_engine, inspector, verbose)
+    inspector = inspect(target_engine)
+    _tighten_candidates_employee_category_not_null(target_engine, inspector, verbose)
     inspector = inspect(target_engine)
     existing_tables = set(inspector.get_table_names())
     all_tables = list(Base.metadata.tables.values())

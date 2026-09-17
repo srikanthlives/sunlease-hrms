@@ -1423,8 +1423,15 @@ class Candidate(Base):
     dl_expiry_date = Column(Date)
 
     applied_designation_id = Column(Integer, ForeignKey("designations.id"), nullable=False)
-    applied_employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=True)
+    applied_employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=False)
     applied_cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=False)
+    # Nullable at the DB level only for backward compatibility with
+    # candidate rows created before Project became mandatory (SQLite can't
+    # add a NOT NULL constraint in place without a table rebuild, and a
+    # blanket rebuild risks a pre-existing row that has no project). Every
+    # new/updated candidate is required to supply one - see
+    # schemas/recruitment.py::CandidateIn.applied_project_id (no default)
+    # and candidate_bulk_import_service.py, which both enforce it.
     applied_project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     # Legacy - Organizational Assignment for a candidate only ever captured
     # Cost Center + Project (Department is decided later, during the

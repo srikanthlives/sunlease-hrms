@@ -225,9 +225,9 @@ export default function CandidateDetail() {
         dl_expiry_date: editForm.dl_expiry_date || null,
         total_experience_years: editForm.total_experience_years === "" ? null : Number(editForm.total_experience_years),
         applied_designation_id: Number(editForm.applied_designation_id),
-        applied_employee_category_id: editForm.applied_employee_category_id ? Number(editForm.applied_employee_category_id) : null,
+        applied_employee_category_id: Number(editForm.applied_employee_category_id),
         applied_cost_center_id: Number(editForm.applied_cost_center_id),
-        applied_project_id: editForm.applied_project_id ? Number(editForm.applied_project_id) : null,
+        applied_project_id: Number(editForm.applied_project_id),
       };
       const res = await client.put(`/recruitment/candidates/${candidateId}`, payload);
       setEditing(false);
@@ -683,7 +683,7 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
 
       <SectionDivider>Employment Information</SectionDivider>
       <div className="grid grid-cols-3 gap-2 mb-4">
-        <Select label="Employee Category" value={form.applied_employee_category_id} onChange={(e) => {
+        <Select label="Employee Category*" value={form.applied_employee_category_id} onChange={(e) => {
           const nextCategoryId = e.target.value;
           const currentDesignation = designations.find((d) => String(d.id) === String(form.applied_designation_id));
           const keepDesignation = currentDesignation && String(currentDesignation.employee_category_id) === String(nextCategoryId);
@@ -692,7 +692,7 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
           <option value="">Select...</option>
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
-        <Select label="Designation" value={form.applied_designation_id} onChange={set("applied_designation_id")}>
+        <Select label="Designation*" value={form.applied_designation_id} onChange={set("applied_designation_id")}>
           <option value="">Select...</option>
           {designations
             .filter((d) => !form.applied_employee_category_id || String(d.employee_category_id) === String(form.applied_employee_category_id) || String(d.id) === String(form.applied_designation_id))
@@ -703,12 +703,12 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
 
       <SectionDivider>Organizational Assignment</SectionDivider>
       <div className="grid grid-cols-3 gap-2 mb-4">
-        <Select label="Cost Center" value={form.applied_cost_center_id} onChange={set("applied_cost_center_id")}>
+        <Select label="Cost Center*" value={form.applied_cost_center_id} onChange={set("applied_cost_center_id")}>
           <option value="">Select...</option>
           {costCenters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
-        <Select label="Project" value={form.applied_project_id} onChange={set("applied_project_id")}>
-          <option value="">None</option>
+        <Select label="Project*" value={form.applied_project_id} onChange={set("applied_project_id")}>
+          <option value="">Select...</option>
           {projects.filter((p) => !form.applied_cost_center_id || p.cost_center_id === Number(form.applied_cost_center_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </Select>
       </div>
@@ -733,6 +733,8 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
           onClick={onSave}
           disabled={
             busy
+            || !form.applied_designation_id || !form.applied_employee_category_id
+            || !form.applied_cost_center_id || !form.applied_project_id
             || !!formatError(form.mobile_number, MOBILE_REGEX, "x")
             || !!formatError(form.alternate_mobile_number, MOBILE_REGEX, "x")
             || !!formatError(form.aadhaar, AADHAAR_REGEX, "x")

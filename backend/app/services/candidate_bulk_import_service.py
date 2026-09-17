@@ -52,9 +52,9 @@ COLUMNS = [
     ("dl_issue_date", "Driving Licence Issue Date (YYYY-MM-DD)"),
     ("dl_expiry_date", "Driving Licence Expiry Date (YYYY-MM-DD)"),
     ("applied_designation", "Applied Designation* (must match Organization Setup)"),
-    ("applied_employee_category", "Applied Employee Category (must match Organization Setup)"),
+    ("applied_employee_category", "Applied Employee Category* (must match Organization Setup)"),
     ("applied_cost_center", "Applied Cost Center* (must match Organization Setup)"),
-    ("applied_project", "Applied Project (must match Organization Setup)"),
+    ("applied_project", "Applied Project* (must match Organization Setup)"),
     ("applied_date", "Applied Date (YYYY-MM-DD)"),
     ("source", "Source"),
     ("remarks", "Remarks"),
@@ -73,7 +73,7 @@ SAMPLE_ROW = {
     "dl_licence_number": "", "dl_badge_number": "", "dl_vehicle_class": "",
     "dl_issuing_authority": "", "dl_issue_date": "", "dl_expiry_date": "",
     "applied_designation": "Bus Driver", "applied_employee_category": "Driver",
-    "applied_cost_center": "Puducherry", "applied_project": "",
+    "applied_cost_center": "Puducherry", "applied_project": "Puducherry Route Ops",
     "applied_date": "2026-01-01", "source": "Referral", "remarks": "",
 }
 
@@ -185,6 +185,8 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
         last_name = _cell_str_upper(data.get("last_name"))
         applied_designation_name = _cell_str(data.get("applied_designation"))
         applied_cost_center_name = _cell_str(data.get("applied_cost_center"))
+        applied_employee_category_name = _cell_str(data.get("applied_employee_category"))
+        applied_project_name = _cell_str(data.get("applied_project"))
 
         if not first_name or not last_name:
             errors.append({"row": row_number, "message": "First Name and Last Name are required"})
@@ -200,8 +202,15 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
             errors.append({"row": row_number, "message": f"Applied Cost Center '{applied_cost_center_name or ''}' not found in Organization Setup"})
             continue
 
-        employee_category = _lookup(db, EmployeeCategory, _cell_str(data.get("applied_employee_category")))
-        project = _lookup(db, Project, _cell_str(data.get("applied_project")))
+        employee_category = _lookup(db, EmployeeCategory, applied_employee_category_name)
+        if not employee_category:
+            errors.append({"row": row_number, "message": f"Applied Employee Category '{applied_employee_category_name or ''}' not found in Organization Setup"})
+            continue
+
+        project = _lookup(db, Project, applied_project_name)
+        if not project:
+            errors.append({"row": row_number, "message": f"Applied Project '{applied_project_name or ''}' not found in Organization Setup"})
+            continue
 
         savepoint = db.begin_nested()
         try:
@@ -243,9 +252,9 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
                 dl_issuing_authority=_cell_str_upper(data.get("dl_issuing_authority")),
                 dl_issue_date=_cell_date(data.get("dl_issue_date")), dl_expiry_date=_cell_date(data.get("dl_expiry_date")),
                 applied_designation_id=designation.id,
-                applied_employee_category_id=employee_category.id if employee_category else None,
+                applied_employee_category_id=employee_category.id,
                 applied_cost_center_id=cost_center.id,
-                applied_project_id=project.id if project else None,
+                applied_project_id=project.id,
                 applied_date=_cell_date(data.get("applied_date")) or date.today(),
                 source=_cell_str_upper(data.get("source")), remarks=_cell_str(data.get("remarks")),
             )

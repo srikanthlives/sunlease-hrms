@@ -61,9 +61,9 @@ class CandidateIn(BaseModel):
     dl_expiry_date: date | None = None
 
     applied_designation_id: int
-    applied_employee_category_id: int | None = None
+    applied_employee_category_id: int
     applied_cost_center_id: int
-    applied_project_id: int | None = None
+    applied_project_id: int
     applied_date: date | None = None
     source: str | None = None
     remarks: str | None = None

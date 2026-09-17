@@ -21,11 +21,16 @@ def _slug(value: str) -> str:
 
 
 def generate_reference_number(db: Session, candidate: Candidate) -> str:
-    """Company code / Cost Center code / Project code / sequence-within-
-    that-scope, e.g. "SUNLEASE/CC-PDY/PRJ-01/003". The Project segment is
-    omitted when the candidate has no applied_project_id (sequence then
-    counts within Company+Cost Center only). Falls back to "NA" for a
-    missing Company/Cost Center code (legacy rows created before those
+    """Company code / Cost Center code / Project code / Employee Category /
+    sequence-within-that-scope, e.g. "SUNLEASE/CC-PDY/PRJ-01/DRIVER/003".
+    The Project segment is omitted when the candidate has no
+    applied_project_id (a candidate can still legitimately have no
+    project even though Cost Center/Category are mandatory - a Project is
+    optional org structure). Employee Category has no separate "code"
+    field the way Company/Cost Center/Project do, so its name is used
+    directly (already uppercase per this app's input convention) with
+    spaces collapsed to hyphens. Falls back to "NA" for a missing
+    Company/Cost Center/Category (legacy rows created before those
     columns were required) rather than raising - a reference number
     should never block candidate creation."""
     cost_center = candidate.cost_center
@@ -33,10 +38,13 @@ def generate_reference_number(db: Session, candidate: Candidate) -> str:
     company_code = (company.code if company else None) or "NA"
     cost_center_code = (cost_center.code if cost_center else None) or "NA"
     project_code = candidate.project.code if candidate.project else None
+    category_name = (candidate.employee_category.name if candidate.employee_category else None) or "NA"
+    category_segment = re.sub(r"\s+", "-", category_name.strip())
 
     scope_query = db.query(Candidate).filter(
         Candidate.applied_cost_center_id == candidate.applied_cost_center_id,
         Candidate.applied_project_id == candidate.applied_project_id,
+        Candidate.applied_employee_category_id == candidate.applied_employee_category_id,
         Candidate.id != candidate.id,
     )
     sequence = scope_query.count() + 1
@@ -44,6 +52,7 @@ def generate_reference_number(db: Session, candidate: Candidate) -> str:
     parts = [company_code, cost_center_code]
     if project_code:
         parts.append(project_code)
+    parts.append(category_segment)
     parts.append(f"{sequence:03d}")
     return "/".join(parts)
 

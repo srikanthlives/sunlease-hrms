@@ -116,9 +116,9 @@ export default function Candidates() {
         current_date_of_joining: form.current_date_of_joining || null,
         total_experience_years: form.total_experience_years === "" ? null : Number(form.total_experience_years),
         applied_designation_id: Number(form.applied_designation_id),
-        applied_employee_category_id: form.applied_employee_category_id ? Number(form.applied_employee_category_id) : null,
+        applied_employee_category_id: Number(form.applied_employee_category_id),
         applied_cost_center_id: Number(form.applied_cost_center_id),
-        applied_project_id: form.applied_project_id ? Number(form.applied_project_id) : null,
+        applied_project_id: Number(form.applied_project_id),
       };
       const res = await client.post("/recruitment/candidates", payload);
       setShowNew(false);
@@ -168,7 +168,8 @@ export default function Candidates() {
   useEffect(() => setPage(1), [search, statusFilter, costCenterFilter, projectFilter, categoryFilter]);
   const { pageRows, page: safePage, pageCount, total } = usePagination(visibleCandidates, page, pageSize);
 
-  const canCreate = form.first_name && form.last_name && form.applied_designation_id && form.applied_cost_center_id
+  const canCreate = form.first_name && form.last_name && form.applied_designation_id
+    && form.applied_employee_category_id && form.applied_cost_center_id && form.applied_project_id
     && !formatError(form.mobile_number, MOBILE_REGEX, "x")
     && !formatError(form.alternate_mobile_number, MOBILE_REGEX, "x")
     && !formatError(form.aadhaar, AADHAAR_REGEX, "x")
@@ -194,8 +195,8 @@ export default function Candidates() {
         <Card>
           <h2 className="text-sm font-semibold text-ink mb-1">New Candidate</h2>
           <p className="text-xs text-ink/40 mb-3">
-            An Application Reference Number (Company Code / Cost Center Code / Project Code / Sequence) is generated
-            automatically once created and used as the temp application number until converted to an employee.
+            An Application Reference Number (Company Code / Cost Center Code / Project Code / Employee Category / Sequence)
+            is generated automatically once created and used as the temp application number until converted to an employee.
           </p>
 
           <SectionDivider>Personal Information</SectionDivider>
@@ -259,25 +260,32 @@ export default function Candidates() {
           <SectionDivider>Employment Information</SectionDivider>
           <div className="grid grid-cols-3 gap-2 mb-4">
             <Input label="Application Reference Number" value="Auto-generated on save" disabled />
-            <Select label="Employee Category" value={form.applied_employee_category_id} onChange={(e) => setForm({ ...form, applied_employee_category_id: e.target.value })}>
+            <Select label="Employee Category*" value={form.applied_employee_category_id} onChange={(e) => {
+              const nextCategoryId = e.target.value;
+              const currentDesignation = designations.find((d) => String(d.id) === String(form.applied_designation_id));
+              const keepDesignation = currentDesignation && String(currentDesignation.employee_category_id) === String(nextCategoryId);
+              setForm({ ...form, applied_employee_category_id: nextCategoryId, applied_designation_id: keepDesignation ? form.applied_designation_id : "" });
+            }}>
               <option value="">Select...</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
-            <Select label="Designation" value={form.applied_designation_id} onChange={(e) => setForm({ ...form, applied_designation_id: e.target.value })}>
+            <Select label="Designation*" value={form.applied_designation_id} onChange={(e) => setForm({ ...form, applied_designation_id: e.target.value })}>
               <option value="">Select...</option>
-              {designations.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {designations
+                .filter((d) => !form.applied_employee_category_id || String(d.employee_category_id) === String(form.applied_employee_category_id) || String(d.id) === String(form.applied_designation_id))
+                .map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </Select>
             <Input type="date" label="Applied Date" value={form.applied_date} onChange={(e) => setForm({ ...form, applied_date: e.target.value })} />
           </div>
 
           <SectionDivider>Organizational Assignment</SectionDivider>
           <div className="grid grid-cols-3 gap-2 mb-4">
-            <Select label="Cost Center" value={form.applied_cost_center_id} onChange={(e) => setForm({ ...form, applied_cost_center_id: e.target.value })}>
+            <Select label="Cost Center*" value={form.applied_cost_center_id} onChange={(e) => setForm({ ...form, applied_cost_center_id: e.target.value })}>
               <option value="">Select...</option>
               {costCenters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
-            <Select label="Project" value={form.applied_project_id} onChange={(e) => setForm({ ...form, applied_project_id: e.target.value })}>
-              <option value="">None</option>
+            <Select label="Project*" value={form.applied_project_id} onChange={(e) => setForm({ ...form, applied_project_id: e.target.value })}>
+              <option value="">Select...</option>
               {projects.filter((p) => !form.applied_cost_center_id || p.cost_center_id === Number(form.applied_cost_center_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
           </div>
