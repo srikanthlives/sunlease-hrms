@@ -1,7 +1,8 @@
+import io
 import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_hr_admin, require_permission
@@ -15,7 +16,7 @@ from app.schemas.recruitment import (
     CandidateIn, CandidateSalaryComponentIn, CandidateStageResultIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, SelectionCriteriaIn,
 )
-from app.services import audit_service, document_service, licence_service, recruitment_service
+from app.services import audit_service, candidate_bulk_import_service, document_service, licence_service, recruitment_service
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
 
@@ -182,6 +183,26 @@ def list_candidates(status_: str | None = None, designation_id: int | None = Non
         query = query.filter(Candidate.applied_cost_center_id == cost_center_id)
     rows = query.order_by(Candidate.created_at.desc()).all()
     return [_candidate_summary_dict(c) for c in rows]
+
+
+@router.get("/candidates-bulk-upload-template", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def download_candidates_bulk_upload_template(db: Session = Depends(get_db)):
+    wb = candidate_bulk_import_service.build_template_workbook(db)
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=hrms_candidate_bulk_upload_template.xlsx"},
+    )
+
+
+@router.post("/candidates-bulk-upload", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def bulk_upload_candidates(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    content = file.file.read()
+    result = candidate_bulk_import_service.import_candidates_workbook(db, content, user)
+    db.commit()
+    return result
 
 
 @router.post("/candidates", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

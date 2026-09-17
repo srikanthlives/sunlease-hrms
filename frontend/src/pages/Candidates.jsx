@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { X } from "lucide-react";
+import { X, Upload, Download } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, Pagination, usePagination, formatAadhaar, formatDate } from "../components/ui";
 
@@ -48,6 +48,11 @@ export default function Candidates() {
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
+  const [bulkError, setBulkError] = useState("");
 
   function reload() {
     const params = {};
@@ -62,6 +67,42 @@ export default function Candidates() {
     client.get("/employee-categories").then((res) => setCategories(res.data));
     client.get("/projects").then((res) => setProjects(res.data));
   }, []);
+
+  async function downloadCandidateTemplate() {
+    const res = await client.get("/recruitment/candidates-bulk-upload-template", { responseType: "blob" });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "hrms_candidate_bulk_upload_template.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function uploadCandidateBulkFile() {
+    if (!bulkFile) return;
+    setBulkUploading(true);
+    setBulkError("");
+    setBulkResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", bulkFile);
+      const res = await client.post("/recruitment/candidates-bulk-upload", form);
+      setBulkResult(res.data);
+      setBulkFile(null);
+      reload();
+    } catch (err) {
+      setBulkError(apiErrorMessage(err));
+    } finally {
+      setBulkUploading(false);
+    }
+  }
+
+  function closeBulkModal() {
+    setBulkOpen(false);
+    setBulkFile(null);
+    setBulkResult(null);
+    setBulkError("");
+  }
 
   async function createCandidate() {
     setError("");
@@ -140,7 +181,12 @@ export default function Candidates() {
           <h1 className="text-xl font-display font-semibold text-ink">Candidates</h1>
           <p className="text-sm text-ink/50 mt-1">Recruitment pipeline — tracked by reference number until converted to an employee.</p>
         </div>
-        <Button onClick={() => setShowNew((s) => !s)}>{showNew ? "Cancel" : "New Candidate"}</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setBulkOpen(true)} className="gap-1.5">
+            <Upload size={14} /> Bulk Upload
+          </Button>
+          <Button onClick={() => setShowNew((s) => !s)}>{showNew ? "Cancel" : "New Candidate"}</Button>
+        </div>
       </div>
       {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}
 
@@ -289,6 +335,57 @@ export default function Candidates() {
           onPageChange={setPage} onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
         />
       </Card>
+
+      {bulkOpen && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={closeBulkModal}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-1">Bulk Upload Candidates</h3>
+            <p className="text-xs text-ink/50 mb-4">
+              Each row creates a new candidate — same as "New Candidate" — with Personal Info, Identity Documents,
+              Current Experience, Applied Designation/Cost Center/Category/Project, and Driving Licence details
+              filled in. Documents and Selection Criteria are completed afterwards per-candidate on the Candidate
+              Detail page. Rows with an Aadhaar/PAN/Driving Licence Number that already belongs to another
+              candidate or employee are skipped with an error, same as adding one candidate manually.
+            </p>
+
+            <Button variant="outline" size="sm" onClick={downloadCandidateTemplate} className="gap-1.5 mb-4">
+              <Download size={14} /> Download Sample Template (.xlsx)
+            </Button>
+
+            {bulkError && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2 mb-3">{bulkError}</div>}
+
+            {bulkResult && (
+              <div className="mb-4 text-sm">
+                <div className="text-ok font-medium mb-1">{bulkResult.created} created.</div>
+                {bulkResult.errors.length > 0 && (
+                  <div className="border border-danger/20 bg-danger/5 rounded-md p-2 max-h-40 overflow-y-auto">
+                    <div className="text-xs font-medium text-danger mb-1">{bulkResult.errors.length} row(s) skipped:</div>
+                    {bulkResult.errors.map((e, i) => (
+                      <div key={i} className="text-xs text-ink/60">Row {e.row}: {e.message}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept=".xlsx"
+                onChange={(e) => { setBulkFile(e.target.files[0]); setBulkResult(null); setBulkError(""); }}
+                className="text-xs flex-1"
+              />
+              <Button size="sm" onClick={uploadCandidateBulkFile} disabled={!bulkFile || bulkUploading}>
+                {bulkUploading ? "Uploading…" : "Upload"}
+              </Button>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <Button variant="outline" onClick={closeBulkModal}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
