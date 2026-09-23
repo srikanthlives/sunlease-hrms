@@ -127,9 +127,32 @@ def update_designation_criteria(row_id: int, payload: DesignationCriteriaUpdateI
 
 @router.delete("/designation-criteria/{row_id}", dependencies=[Depends(require_hr_admin)])
 def delete_designation_criteria(row_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Hard-deletes only if no candidate in this row's scope has ever
+    been tested against it yet - a CandidateStageResult isn't linked to
+    this row by FK (it's keyed by candidate_id+criteria_id directly, see
+    CandidateStageResult's docstring), so recorded results would silently
+    survive a delete, invisible from then on but not actually gone -
+    surprising for HR. Once real test data exists, use Deactivate
+    instead (keeps the row and its history, just stops it applying to
+    new candidates)."""
     r = db.query(DesignationCriteria).filter(DesignationCriteria.id == row_id).first()
     if not r:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
+    candidates_query = db.query(Candidate).filter(Candidate.applied_designation_id == r.designation_id)
+    if r.cost_center_id is not None:
+        candidates_query = candidates_query.filter(Candidate.applied_cost_center_id == r.cost_center_id)
+    candidate_ids = [c.id for c in candidates_query.all()]
+    has_results = bool(candidate_ids) and db.query(CandidateStageResult).filter(
+        CandidateStageResult.criteria_id == r.criteria_id,
+        CandidateStageResult.candidate_id.in_(candidate_ids),
+    ).first()
+    if has_results:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This requirement already has recorded candidate test results - deactivate it instead of removing it.",
+        )
+
     db.delete(r)
     audit_service.record(db, "DESIGNATION_CRITERIA", row_id, AuditAction.UPDATE, user, old_value="removed")
     db.commit()
