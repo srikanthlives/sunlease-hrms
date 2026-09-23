@@ -74,7 +74,7 @@ export default function UsersAdmin() {
     { key: "is_active", header: "Status", render: (u) => (u.is_active ? <StatusBadge status="ACTIVE" /> : <StatusBadge status="DISABLED" />) },
     {
       key: "scope", header: "Cost Center Scope", render: (u) =>
-        u.role === "HR_ADMIN" ? <span className="text-ink/40 text-xs">All (bypasses scope)</span> :
+        ADMIN_ROLES.includes(u.role) ? <span className="text-ink/40 text-xs">All (bypasses scope)</span> :
           <Button variant="outline" size="sm" onClick={() => openScope(u.id)} className="text-xs">Manage Scope</Button>,
     },
     {

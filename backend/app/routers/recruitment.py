@@ -9,12 +9,12 @@ from app.core.deps import get_current_user, require_hr_admin, require_permission
 from app.db.session import get_db
 from app.models.enums import AuditAction, Permission
 from app.models.models import (
-    Candidate, CandidateChangeRequest, CandidateDocument, CandidateSalaryComponent, CandidateStageResult,
+    Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
     DesignationCriteria, SelectionCriteria, User,
 )
 from app.schemas.recruitment import (
-    CandidateIn, CandidateSalaryComponentIn, CandidateStageResultIn, ChangeRequestReviewIn,
-    ConvertCandidateIn, DesignationCriteriaIn, SelectionCriteriaIn,
+    CandidateIn, CandidateStageResultIn, ChangeRequestReviewIn,
+    ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
 from app.services import audit_service, candidate_bulk_import_service, document_service, licence_service, recruitment_service
 
@@ -70,15 +70,17 @@ def _designation_criteria_dict(r: DesignationCriteria) -> dict:
         "id": r.id, "designation_id": r.designation_id, "designation_name": r.designation.name if r.designation else None,
         "cost_center_id": r.cost_center_id, "cost_center_name": r.cost_center.name if r.cost_center else None,
         "criteria_id": r.criteria_id, "criteria_name": r.criteria.name if r.criteria else None,
-        "is_mandatory": r.is_mandatory, "sequence": r.sequence,
+        "is_mandatory": r.is_mandatory, "sequence": r.sequence, "is_active": r.is_active,
     }
 
 
 @router.get("/designation-criteria")
-def list_designation_criteria(designation_id: int | None = None, db: Session = Depends(get_db)):
+def list_designation_criteria(designation_id: int | None = None, include_inactive: bool = False, db: Session = Depends(get_db)):
     query = db.query(DesignationCriteria)
     if designation_id is not None:
         query = query.filter(DesignationCriteria.designation_id == designation_id)
+    if not include_inactive:
+        query = query.filter(DesignationCriteria.is_active.is_(True))
     rows = query.order_by(DesignationCriteria.designation_id, DesignationCriteria.sequence).all()
     return [_designation_criteria_dict(r) for r in rows]
 
@@ -100,6 +102,25 @@ def create_designation_criteria(payload: DesignationCriteriaIn, db: Session = De
     db.add(r)
     db.flush()
     audit_service.record(db, "DESIGNATION_CRITERIA", r.id, AuditAction.CREATE, user)
+    db.commit()
+    return _designation_criteria_dict(r)
+
+
+@router.put("/designation-criteria/{row_id}", dependencies=[Depends(require_hr_admin)])
+def update_designation_criteria(row_id: int, payload: DesignationCriteriaUpdateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Edits Mandatory/Optional, Sequence, and Active/Inactive on an
+    existing requirement - deactivating one (rather than deleting it)
+    stops it from being required for future candidates while keeping the
+    row's history/audit trail intact, same "deactivate over delete"
+    convention as every other master in this codebase."""
+    r = db.query(DesignationCriteria).filter(DesignationCriteria.id == row_id).first()
+    if not r:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    r.is_mandatory = payload.is_mandatory
+    r.sequence = payload.sequence
+    r.is_active = payload.is_active
+    db.add(r)
+    audit_service.record(db, "DESIGNATION_CRITERIA", r.id, AuditAction.UPDATE, user)
     db.commit()
     return _designation_criteria_dict(r)
 
@@ -154,13 +175,6 @@ def _candidate_detail_dict(db: Session, c: Candidate) -> dict:
         "criteria_status": recruitment_service.criteria_status(db, c),
         "all_mandatory_passed": recruitment_service.all_mandatory_passed(db, c),
         "aadhaar_duplicate_warning": recruitment_service.check_aadhaar_duplicates(db, c.aadhaar, exclude_candidate_id=c.id),
-        "salary_components": [
-            {
-                "id": sc.id, "component_id": sc.component_id,
-                "component_code": sc.component.code if sc.component else None, "component_name": sc.component.name if sc.component else None,
-                "amount": sc.amount, "percentage": sc.percentage, "formula": sc.formula,
-            } for sc in c.salary_components
-        ],
         "required_documents": document_service.resolve_required_documents_for_candidate(db, c),
     }
 
@@ -234,7 +248,10 @@ def update_candidate(candidate_id: int, payload: CandidateIn, db: Session = Depe
     candidate = _get_candidate(db, candidate_id)
     if candidate.status == "CONVERTED":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
-    recruitment_service.validate_unique_identifiers(db, payload.aadhaar, payload.pan, payload.dl_licence_number, exclude_candidate_id=candidate.id)
+    recruitment_service.validate_unique_identifiers(
+        db, payload.aadhaar, payload.pan, payload.dl_licence_number,
+        exclude_candidate_id=candidate.id, exclude_employee_id=candidate.converted_employee_id,
+    )
     changes = {
         field: value for field, value in payload.model_dump().items()
         if getattr(candidate, field) != value
@@ -254,6 +271,18 @@ def disqualify_candidate(candidate_id: int, db: Session = Depends(get_db), user:
     recruitment_service.disqualify_candidate(db, candidate, user)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/candidates/{candidate_id}/requalify", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def requalify_candidate(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Reopens a Rejected or Converted candidate back to Applied so they
+    can be reconsidered through the whole pipeline again - covers both
+    "we want to give this disqualified candidate another look" and a
+    Converted-and-since-resigned person reapplying."""
+    candidate = _get_candidate(db, candidate_id)
+    recruitment_service.requalify_candidate(db, candidate, user)
+    db.commit()
+    return {"ok": True, "status": candidate.status}
 
 
 @router.post("/candidates/{candidate_id}/submit", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
@@ -334,22 +363,6 @@ def download_stage_result_attachment(candidate_id: int, criteria_id: int, db: Se
     if not stage_result or not stage_result.attachment_object_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No proof document uploaded for this criteria")
     return FileResponse(recruitment_service.stage_result_attachment_path(stage_result), filename=stage_result.attachment_file_name)
-
-
-@router.put("/candidates/{candidate_id}/salary-components", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
-def set_candidate_salary(candidate_id: int, payload: list[CandidateSalaryComponentIn], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """Full-replace: whatever the caller sends becomes the candidate's
-    entire proposed salary structure, same full-replace convention as
-    RolePermission's PUT /roles/{id}/permissions."""
-    candidate = _get_candidate(db, candidate_id)
-    if candidate.status == "CONVERTED":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
-    db.query(CandidateSalaryComponent).filter(CandidateSalaryComponent.candidate_id == candidate.id).delete()
-    for row in payload:
-        db.add(CandidateSalaryComponent(candidate_id=candidate.id, **row.model_dump()))
-    audit_service.record(db, "CANDIDATE_SALARY", candidate.id, AuditAction.UPDATE, user)
-    db.commit()
-    return _candidate_detail_dict(db, _get_candidate(db, candidate_id))
 
 
 @router.post("/candidates/{candidate_id}/convert", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

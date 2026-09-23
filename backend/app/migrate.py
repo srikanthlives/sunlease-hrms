@@ -104,6 +104,22 @@ def _tighten_candidates_employee_category_not_null(target_engine: Engine, inspec
     return True
 
 
+def _drop_orphaned_table(target_engine: Engine, inspector, table_name: str, verbose: bool) -> bool:
+    """One-off fixup: drops a table whose model was removed from
+    models.py entirely (migrate.py's additive-only column/table-add logic
+    has nothing that would ever clean this up on its own). Only ever call
+    this for a table confirmed to have no model/FK still pointing at it -
+    it is a real, unconditional DROP TABLE, not a rebuild. Idempotent:
+    only runs while the table is still there."""
+    if table_name not in inspector.get_table_names():
+        return False
+    with target_engine.begin() as conn:
+        conn.execute(text(f'DROP TABLE "{table_name}"'))
+    if verbose:
+        print(f"Dropped orphaned table {table_name!r} (its model was removed from models.py).")
+    return True
+
+
 def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
     target_engine = target_engine or engine
     summary = {"tables_created": [], "columns_added": []}
@@ -112,6 +128,11 @@ def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
     _drop_departments_cost_center_id(target_engine, inspector, verbose)
     inspector = inspect(target_engine)
     _tighten_candidates_employee_category_not_null(target_engine, inspector, verbose)
+    inspector = inspect(target_engine)
+    # CandidateSalaryComponent (Proposed Salary on the Candidate page) was
+    # removed entirely - see recruitment_service.py/routers/recruitment.py
+    # history. Nothing references this table any more.
+    _drop_orphaned_table(target_engine, inspector, "candidate_salary_components", verbose)
     inspector = inspect(target_engine)
     existing_tables = set(inspector.get_table_names())
     all_tables = list(Base.metadata.tables.values())

@@ -1344,6 +1344,7 @@ class DesignationCriteria(Base):
     criteria_id = Column(Integer, ForeignKey("selection_criteria.id"), nullable=False)
     is_mandatory = Column(Boolean, default=True)
     sequence = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=now)
 
     designation = relationship("Designation")
@@ -1456,7 +1457,6 @@ class Candidate(Base):
     project = relationship("Project")
     department = relationship("Department")
     stage_results = relationship("CandidateStageResult", back_populates="candidate", cascade="all, delete-orphan")
-    salary_components = relationship("CandidateSalaryComponent", back_populates="candidate", cascade="all, delete-orphan")
     documents = relationship("CandidateDocument", back_populates="candidate", cascade="all, delete-orphan")
 
 
@@ -1487,27 +1487,6 @@ class CandidateStageResult(Base):
     candidate = relationship("Candidate", back_populates="stage_results")
     criteria = relationship("SelectionCriteria")
     reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
-
-
-class CandidateSalaryComponent(Base):
-    """The salary HR sets for a candidate once selection clears, held here
-    (not yet effective-dated - there's no episode to date it against
-    until conversion) and copied verbatim into SalaryStructureComponent
-    rows by recruitment_service.convert_to_employee, using the same
-    set_salary_structure_component this codebase already uses everywhere
-    else for that table."""
-
-    __tablename__ = "candidate_salary_components"
-
-    id = Column(Integer, primary_key=True)
-    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
-    component_id = Column(Integer, ForeignKey("salary_components.id"), nullable=False)
-    amount = Column(Float, nullable=True)
-    percentage = Column(Float, nullable=True)
-    formula = Column(String(500), nullable=True)
-
-    candidate = relationship("Candidate", back_populates="salary_components")
-    component = relationship("SalaryComponent")
 
 
 class CandidateDocument(Base):

@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.enums import AuditAction, CandidateStatus, RoleName, TransactionType
 from app.models.models import (
-    Candidate, CandidateChangeRequest, CandidateDocument, CandidateSalaryComponent, CandidateStageResult,
+    Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
     DesignationCriteria, DrivingLicenceDetail, Employee, EmploymentEpisode, SelectionCriteria, User,
 )
-from app.services import approval_service, audit_service, document_service, employee_service, payroll_service
+from app.services import approval_service, audit_service, document_service, employee_service
 
 
 def _slug(value: str) -> str:
@@ -68,6 +68,7 @@ def required_criteria(db: Session, designation_id: int, cost_center_id: int | No
         db.query(DesignationCriteria)
         .filter(DesignationCriteria.designation_id == designation_id)
         .filter((DesignationCriteria.cost_center_id.is_(None)) | (DesignationCriteria.cost_center_id == cost_center_id))
+        .filter(DesignationCriteria.is_active.is_(True))
         .all()
     )
     by_criteria: dict[int, DesignationCriteria] = {}
@@ -129,7 +130,7 @@ def _find_matches(db: Session, employee_query, candidate_query, exclude_candidat
 
 def validate_unique_identifiers(
     db: Session, aadhaar: str | None, pan: str | None, dl_licence_number: str | None,
-    exclude_candidate_id: int | None = None,
+    exclude_candidate_id: int | None = None, exclude_employee_id: int | None = None,
 ) -> None:
     """Hard-blocks creating/updating a candidate whose Aadhaar, PAN, or
     Driving Licence Number matches an existing Employee or another
@@ -137,22 +138,28 @@ def validate_unique_identifiers(
     replaces, these three are treated as unique identifiers that can
     never legitimately collide between two different people, so there's
     nothing for HR to "judge" the way there might be for a name/mobile
-    match; the row is simply rejected."""
+    match; the row is simply rejected.
+
+    exclude_employee_id: a requalified candidate (see requalify_candidate)
+    that was previously CONVERTED already has an Employee row carrying
+    these exact identifiers - that's their own past self, not a
+    collision, so routers/recruitment.py passes
+    candidate.converted_employee_id here when editing one."""
     errors = []
 
     if aadhaar:
-        matches = _find_matches(
-            db, db.query(Employee).filter(Employee.aadhaar == aadhaar),
-            db.query(Candidate).filter(Candidate.aadhaar == aadhaar), exclude_candidate_id,
-        )
+        employee_query = db.query(Employee).filter(Employee.aadhaar == aadhaar)
+        if exclude_employee_id:
+            employee_query = employee_query.filter(Employee.id != exclude_employee_id)
+        matches = _find_matches(db, employee_query, db.query(Candidate).filter(Candidate.aadhaar == aadhaar), exclude_candidate_id)
         if matches:
             errors.append(f"Aadhaar Number already used by {matches[0]}")
 
     if pan:
-        matches = _find_matches(
-            db, db.query(Employee).filter(Employee.pan == pan),
-            db.query(Candidate).filter(Candidate.pan == pan), exclude_candidate_id,
-        )
+        employee_query = db.query(Employee).filter(Employee.pan == pan)
+        if exclude_employee_id:
+            employee_query = employee_query.filter(Employee.id != exclude_employee_id)
+        matches = _find_matches(db, employee_query, db.query(Candidate).filter(Candidate.pan == pan), exclude_candidate_id)
         if matches:
             errors.append(f"PAN Number already used by {matches[0]}")
 
@@ -160,7 +167,7 @@ def validate_unique_identifiers(
         employee_matches = [
             f"Employee: {r.episode.employee.first_name} {r.episode.employee.last_name}"
             for r in db.query(DrivingLicenceDetail).filter(DrivingLicenceDetail.licence_number == dl_licence_number).all()
-            if r.episode and r.episode.employee
+            if r.episode and r.episode.employee and r.episode.employee_id != exclude_employee_id
         ]
         candidate_query = db.query(Candidate).filter(Candidate.dl_licence_number == dl_licence_number)
         if exclude_candidate_id:
@@ -235,6 +242,33 @@ def disqualify_candidate(db: Session, candidate: Candidate, user: User) -> None:
     audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="REJECTED")
 
 
+def requalify_candidate(db: Session, candidate: Candidate, user: User) -> None:
+    """Puts a REJECTED or CONVERTED candidate back to square one (APPLIED)
+    to be reconsidered through the full pipeline again - re-editable,
+    resubmittable, and re-testable on every Selection Criteria (existing
+    PASS/FAIL/EXCEPTION results from the earlier round are left as-is,
+    visible as history, but every criteria can simply be re-marked).
+
+    For a CONVERTED candidate specifically, this is the "rejoiner"
+    case - someone who resigned/was separated and is now reapplying.
+    converted_employee_id/converted_episode_id are deliberately left in
+    place rather than cleared: they're a breadcrumb to the person's prior
+    employment, and the candidate's own UI only reads them while
+    status == CONVERTED (see CandidateDetail.jsx's isConverted banner),
+    so leaving them set here causes no confusion once status moves on.
+    Re-converting this same candidate later creates a brand new Employee
+    row (recruitment_service.convert_to_employee always does), same as
+    if the person had applied as a fresh candidate - this module doesn't
+    attempt the "same Employee, new EmploymentEpisode" rejoin pattern
+    Module 1 uses for a direct employee rehire."""
+    if candidate.status not in (CandidateStatus.REJECTED, CandidateStatus.CONVERTED):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a Rejected or Converted candidate can be requalified")
+    previous_status = candidate.status
+    candidate.status = CandidateStatus.APPLIED
+    db.add(candidate)
+    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, old_value=previous_status, new_value="APPLIED (requalified)")
+
+
 def save_or_request_candidate_update(db: Session, candidate: Candidate, changes: dict, user: User) -> dict:
     """Direct-apply unless the candidate is already APPROVED, in which
     case the edit is queued as a CandidateChangeRequest instead - "approved
@@ -296,9 +330,13 @@ def review_candidate_change_request(db: Session, request: CandidateChangeRequest
 
 
 def all_mandatory_passed(db: Session, candidate: Candidate) -> bool:
+    """All mandatory Selection Criteria must be PASS or EXCEPTION before a
+    candidate can be converted to an employee - EXCEPTION covers a
+    mandatory criteria HR has deliberately waived (with a remark
+    explaining why) rather than the candidate genuinely passing it."""
     statuses = criteria_status(db, candidate)
     mandatory = [s for s in statuses if s["is_mandatory"]]
-    return len(mandatory) > 0 and all(s["result"] == "PASS" for s in mandatory)
+    return len(mandatory) > 0 and all(s["result"] in ("PASS", "EXCEPTION") for s in mandatory)
 
 
 def get_or_create_stage_result(db: Session, candidate: Candidate, criteria_id: int) -> CandidateStageResult:
@@ -383,7 +421,7 @@ def convert_to_employee(
     if candidate.status != CandidateStatus.APPROVED:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Candidate must be approved before conversion to employee")
     if not all_mandatory_passed(db, candidate):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has not passed all mandatory selection criteria yet")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has not passed (or been marked EXCEPTION for) all mandatory selection criteria yet")
     if db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "Employee Number already in use")
 
@@ -426,11 +464,6 @@ def convert_to_employee(
         "percentage": 100,
         "effective_from": date_of_joining,
     })
-
-    for csc in candidate.salary_components:
-        payroll_service.set_salary_structure_component(
-            db, episode.id, csc.component_id, csc.amount, csc.percentage, date_of_joining, user, formula=csc.formula,
-        )
 
     document_service.copy_candidate_documents_to_episode(db, candidate, episode, user)
 

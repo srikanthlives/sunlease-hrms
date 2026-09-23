@@ -5,7 +5,7 @@ import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 
-const RESULT_OPTIONS = ["PENDING", "PASS", "FAIL"];
+const RESULT_OPTIONS = ["PENDING", "PASS", "FAIL", "EXCEPTION"];
 
 // Mirrors backend/app/core/validators.py - kept in sync manually since the
 // frontend and backend don't share a validation layer. Only checked when
@@ -32,7 +32,6 @@ export default function CandidateDetail() {
   const { candidateId } = useParams();
   const navigate = useNavigate();
   const [candidate, setCandidate] = useState(null);
-  const [components, setComponents] = useState([]);
   const [designations, setDesignations] = useState([]);
   const [categories, setCategories] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
@@ -40,19 +39,27 @@ export default function CandidateDetail() {
   const [pendingChanges, setPendingChanges] = useState([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [salaryRows, setSalaryRows] = useState([]);
   const [convertForm, setConvertForm] = useState({ employee_number: "", date_of_joining: "" });
   const [docUploadingId, setDocUploadingId] = useState(null);
   const [docError, setDocError] = useState("");
   const [previewDoc, setPreviewDoc] = useState(null);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
+  const [testedOnByCriteria, setTestedOnByCriteria] = useState({});
 
   function reload() {
     client.get(`/recruitment/candidates/${candidateId}`)
       .then((res) => {
         setCandidate(res.data);
-        setSalaryRows(res.data.salary_components.map((s) => ({ component_id: String(s.component_id), amount: s.amount ?? "", percentage: s.percentage ?? "", formula: s.formula ?? "" })));
+        setTestedOnByCriteria((prev) => {
+          const next = { ...prev };
+          for (const row of res.data.criteria_status || []) {
+            if (next[row.criteria_id] === undefined) {
+              next[row.criteria_id] = row.tested_on || new Date().toISOString().slice(0, 10);
+            }
+          }
+          return next;
+        });
       })
       .catch((err) => setError(apiErrorMessage(err)));
     client.get("/recruitment/candidates-change-requests", { params: { candidate_id: candidateId, status_: "PENDING" } })
@@ -62,7 +69,6 @@ export default function CandidateDetail() {
   useEffect(reload, [candidateId]);
 
   useEffect(() => {
-    client.get("/payroll/components").then((res) => setComponents(res.data));
     client.get("/designations").then((res) => setDesignations(res.data));
     client.get("/employee-categories").then((res) => setCategories(res.data));
     client.get("/cost-centers").then((res) => setCostCenters(res.data));
@@ -70,7 +76,12 @@ export default function CandidateDetail() {
   }, []);
 
   async function saveResult(row, result) {
-    if ((result === "PASS" || result === "FAIL") && !row.attachment_file_name) {
+    if (result === "EXCEPTION") {
+      const proceed = window.confirm(
+        `Mark "${row.criteria_name}" as an EXCEPTION? This waives a mandatory criteria without the candidate actually passing it — the candidate can still be converted to an employee as if it had passed.`,
+      );
+      if (!proceed) return;
+    } else if ((result === "PASS" || result === "FAIL") && !row.attachment_file_name) {
       const proceed = window.confirm(
         `No proof document is attached for "${row.criteria_name}". Do you really want to mark this ${result}?`,
       );
@@ -78,8 +89,9 @@ export default function CandidateDetail() {
     }
     setError("");
     try {
+      const tested_on = testedOnByCriteria[row.criteria_id] || new Date().toISOString().slice(0, 10);
       await client.post(`/recruitment/candidates/${candidateId}/stage-results`, {
-        criteria_id: row.criteria_id, result, tested_on: new Date().toISOString().slice(0, 10),
+        criteria_id: row.criteria_id, result, tested_on,
       });
       reload();
     } catch (err) {
@@ -112,41 +124,6 @@ export default function CandidateDetail() {
       URL.revokeObjectURL(url);
     } catch (err) {
       setError(apiErrorMessage(err));
-    }
-  }
-
-  function addSalaryRow() {
-    setSalaryRows([...salaryRows, { component_id: "", amount: "", percentage: "", formula: "" }]);
-  }
-
-  function updateSalaryRow(idx, field, value) {
-    const next = [...salaryRows];
-    next[idx] = { ...next[idx], [field]: value };
-    setSalaryRows(next);
-  }
-
-  function removeSalaryRow(idx) {
-    setSalaryRows(salaryRows.filter((_, i) => i !== idx));
-  }
-
-  async function saveSalary() {
-    setError("");
-    setBusy(true);
-    try {
-      const payload = salaryRows
-        .filter((r) => r.component_id)
-        .map((r) => ({
-          component_id: Number(r.component_id),
-          amount: r.amount !== "" ? Number(r.amount) : null,
-          percentage: r.percentage !== "" ? Number(r.percentage) : null,
-          formula: r.formula || null,
-        }));
-      await client.put(`/recruitment/candidates/${candidateId}/salary-components`, payload);
-      reload();
-    } catch (err) {
-      setError(apiErrorMessage(err));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -195,6 +172,22 @@ export default function CandidateDetail() {
     setBusy(true);
     try {
       await client.post(`/recruitment/candidates/${candidateId}/disqualify`);
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requalifyCandidate() {
+    const message = candidate.status === "CONVERTED"
+      ? "Requalify this candidate? Use this if they've resigned/separated and are reapplying — they'll go back to Applied and re-enter the full selection pipeline."
+      : "Requalify this candidate for reconsideration? They'll go back to Applied and re-enter the full selection pipeline.";
+    if (!window.confirm(message)) return;
+    setBusy(true);
+    try {
+      await client.post(`/recruitment/candidates/${candidateId}/requalify`);
       reload();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -302,7 +295,17 @@ export default function CandidateDetail() {
     { key: "criteria_name", header: "Criteria" },
     { key: "is_mandatory", header: "Mandatory", render: (r) => (r.is_mandatory ? "Yes" : "Optional") },
     { key: "result", header: "Result", render: (r) => <StatusBadge status={r.result} /> },
-    { key: "tested_on", header: "Tested On", render: (r) => formatDate(r.tested_on) },
+    {
+      key: "tested_on", header: "Tested On",
+      render: (r) => canRecordCriteria ? (
+        <Input
+          type="date"
+          value={testedOnByCriteria[r.criteria_id] ?? (r.tested_on || new Date().toISOString().slice(0, 10))}
+          onChange={(e) => setTestedOnByCriteria({ ...testedOnByCriteria, [r.criteria_id]: e.target.value })}
+          className="w-36"
+        />
+      ) : formatDate(r.tested_on),
+    },
     {
       key: "proof", header: "Proof",
       render: (r) => (
@@ -373,24 +376,29 @@ export default function CandidateDetail() {
         </div>
       )}
 
-      {!isTerminal && (
-        <Card>
-          <h2 className="text-sm font-semibold text-ink mb-3">Workflow</h2>
-          <div className="flex flex-wrap gap-2">
-            {isApplied && (
-              <Button variant="accent" onClick={submitForApproval} disabled={busy}>Submit for Approval</Button>
-            )}
-            {isPendingApproval && (
-              <>
-                <Button variant="accent" onClick={approveSubmission} disabled={busy}>Approve</Button>
-                <Button variant="outline" onClick={returnForCorrection} disabled={busy}>Send Back for Correction</Button>
-              </>
-            )}
+      <Card>
+        <h2 className="text-sm font-semibold text-ink mb-3">Workflow</h2>
+        <div className="flex flex-wrap gap-2">
+          {isApplied && (
+            <Button variant="accent" onClick={submitForApproval} disabled={busy}>Submit for Approval</Button>
+          )}
+          {isPendingApproval && (
+            <>
+              <Button variant="accent" onClick={approveSubmission} disabled={busy}>Approve</Button>
+              <Button variant="outline" onClick={returnForCorrection} disabled={busy}>Send Back for Correction</Button>
+            </>
+          )}
+          {!isTerminal && (
             <Button variant="danger" onClick={disqualifyCandidate} disabled={busy}>Disqualify Candidate</Button>
-          </div>
-          {isApplied && <p className="text-xs text-ink/40 mt-2">Selection Criteria can't be recorded until this candidate is approved.</p>}
-        </Card>
-      )}
+          )}
+          {isTerminal && (
+            <Button variant="accent" onClick={requalifyCandidate} disabled={busy}>Requalify Candidate</Button>
+          )}
+        </div>
+        {isApplied && <p className="text-xs text-ink/40 mt-2">Selection Criteria can't be recorded until this candidate is approved.</p>}
+        {isRejected && <p className="text-xs text-ink/40 mt-2">Disqualified — Requalify to reconsider this candidate; they'll re-enter the pipeline at Applied.</p>}
+        {isConverted && <p className="text-xs text-ink/40 mt-2">Converted to employee — Requalify only if this person has since resigned/separated and is reapplying as a new candidate.</p>}
+      </Card>
 
       <Card>
         <div className="flex items-center justify-between mb-3">
@@ -555,35 +563,12 @@ export default function CandidateDetail() {
           <>
             <Table columns={criteriaColumns} rows={candidate.criteria_status} keyField="criteria_id" empty="No selection criteria configured for this designation." />
             {!candidate.all_mandatory_passed && (
-              <p className="text-xs text-ink/40 mt-2">All mandatory criteria must be marked PASS before this candidate can be converted.</p>
+              <p className="text-xs text-ink/40 mt-2">All mandatory criteria must be marked PASS or EXCEPTION before this candidate can be converted.</p>
             )}
           </>
         )}
       </Card>
 
-      {!isTerminal && (
-        <Card>
-          <h2 className="text-sm font-semibold text-ink mb-3">Proposed Salary</h2>
-          <div className="space-y-2">
-            {salaryRows.map((row, idx) => (
-              <div key={idx} className="grid grid-cols-5 gap-2 items-end">
-                <Select value={row.component_id} onChange={(e) => updateSalaryRow(idx, "component_id", e.target.value)}>
-                  <option value="">Component...</option>
-                  {components.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
-                </Select>
-                <Input type="number" placeholder="Amount" value={row.amount} onChange={(e) => updateSalaryRow(idx, "amount", e.target.value)} />
-                <Input type="number" placeholder="Percentage" value={row.percentage} onChange={(e) => updateSalaryRow(idx, "percentage", e.target.value)} />
-                <Input placeholder="Formula" value={row.formula} onChange={(e) => updateSalaryRow(idx, "formula", e.target.value)} />
-                <Button variant="danger" size="sm" onClick={() => removeSalaryRow(idx)}>Remove</Button>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2 mt-3">
-            <Button variant="outline" onClick={addSalaryRow}>Add Component</Button>
-            <Button onClick={saveSalary} disabled={busy}>{busy ? "Saving…" : "Save Salary"}</Button>
-          </div>
-        </Card>
-      )}
 
       {!isTerminal && isApproved && (
         <Card>
@@ -600,7 +585,7 @@ export default function CandidateDetail() {
             {busy ? "Converting…" : "Convert to Employee"}
           </Button>
           {!candidate.all_mandatory_passed && (
-            <p className="text-xs text-ink/40 mt-2">Blocked until every mandatory selection criteria above is marked PASS.</p>
+            <p className="text-xs text-ink/40 mt-2">Blocked until every mandatory selection criteria above is marked PASS or EXCEPTION.</p>
           )}
         </Card>
       )}

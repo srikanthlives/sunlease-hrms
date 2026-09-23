@@ -23,6 +23,16 @@ class DesignationCriteriaIn(BaseModel):
     sequence: int = 0
 
 
+class DesignationCriteriaUpdateIn(BaseModel):
+    """Editing an existing requirement - Designation/Cost Center/Criteria
+    are the row's identity (see uq_designation_criteria) and aren't
+    changed here; create a new row (and delete the old one, if needed)
+    to re-target a requirement at a different designation/criteria."""
+    is_mandatory: bool
+    sequence: int
+    is_active: bool = True
+
+
 class CandidateIn(BaseModel):
     first_name: str
     middle_name: str | None = None
@@ -105,28 +115,17 @@ class CandidateIn(BaseModel):
 
 class CandidateStageResultIn(BaseModel):
     criteria_id: int
-    result: str  # PENDING/PASS/FAIL
+    result: str  # PENDING/PASS/FAIL/EXCEPTION
     tested_on: date | None = None
     remarks: str | None = None
 
     @model_validator(mode="after")
     def _check_result(self):
-        if self.result not in ("PENDING", "PASS", "FAIL"):
-            raise ValueError("result must be PENDING, PASS or FAIL")
+        if self.result not in ("PENDING", "PASS", "FAIL", "EXCEPTION"):
+            raise ValueError("result must be PENDING, PASS, FAIL or EXCEPTION")
         return self
 
 
-class CandidateSalaryComponentIn(BaseModel):
-    component_id: int
-    amount: float | None = None
-    percentage: float | None = None
-    formula: str | None = None
-
-    @model_validator(mode="after")
-    def _check_one_of(self):
-        if sum(v is not None for v in (self.amount, self.percentage, self.formula)) != 1:
-            raise ValueError("Provide exactly one of amount, percentage, or formula")
-        return self
 
 
 class ConvertCandidateIn(BaseModel):

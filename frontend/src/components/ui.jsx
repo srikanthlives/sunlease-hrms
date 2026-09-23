@@ -33,6 +33,9 @@ const STATUS_STYLES = {
   EARNING: "bg-ok/10 text-ok border-ok/30",
   DEDUCTION: "bg-danger/10 text-danger border-danger/30",
   ADDITION: "bg-accent-500/10 text-accent-600 border-accent-500/30",
+  PASS: "bg-ok/10 text-ok border-ok/30",
+  FAIL: "bg-danger/10 text-danger border-danger/30",
+  EXCEPTION: "bg-warn/10 text-warn border-warn/30",
 };
 
 export function StatusBadge({ status }) {
@@ -140,15 +143,13 @@ export function Checkbox({ label, className = "", ...props }) {
   );
 }
 
-const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-// Display format everywhere in the app: DD-MMM-YYYY.
+// Display format everywhere in the app: DD-MM-YYYY.
 export function formatDate(value) {
   if (!value) return "—";
   const d = value instanceof Date ? value : new Date(String(value).length <= 10 ? `${value}T00:00:00` : value);
   if (Number.isNaN(d.getTime())) return String(value);
   const day = String(d.getDate()).padStart(2, "0");
-  const month = MONTH_ABBR[d.getMonth()];
+  const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = d.getFullYear();
   return `${day}-${month}-${year}`;
 }
