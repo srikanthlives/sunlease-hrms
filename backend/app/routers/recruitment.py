@@ -10,13 +10,13 @@ from app.db.session import get_db
 from app.models.enums import AuditAction, Permission
 from app.models.models import (
     Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
-    DesignationCriteria, SelectionCriteria, User,
+    DesignationCriteria, Project, SelectionCriteria, User,
 )
 from app.schemas.recruitment import (
     CandidateIn, CandidateStageResultIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
-from app.services import audit_service, candidate_bulk_import_service, document_service, licence_service, recruitment_service
+from app.services import audit_service, candidate_bulk_import_service, document_service, licence_service, permission_service, recruitment_service
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
 
@@ -209,9 +209,28 @@ def _get_candidate(db: Session, candidate_id: int) -> Candidate:
     return c
 
 
+def _check_applied_scope(db: Session, user: User, cost_center_id: int | None, project_id: int | None) -> None:
+    """Non-admin users can only create/edit candidates in Cost Centers (and
+    Projects under them) they're scoped to - the dropdowns are already
+    filtered (routers/masters.py), this is the server-side guard so the
+    restriction can't be bypassed by calling the API directly."""
+    allowed = permission_service.user_cost_center_ids(db, user)
+    if allowed is None:
+        return
+    if cost_center_id is not None and cost_center_id not in allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to this Cost Center")
+    if project_id is not None:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if project and project.cost_center_id not in allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to this Project's Cost Center")
+
+
 @router.get("/candidates", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
-def list_candidates(status_: str | None = None, designation_id: int | None = None, cost_center_id: int | None = None, db: Session = Depends(get_db)):
+def list_candidates(status_: str | None = None, designation_id: int | None = None, cost_center_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(Candidate)
+    allowed = permission_service.user_cost_center_ids(db, user)
+    if allowed is not None:
+        query = query.filter(Candidate.applied_cost_center_id.in_(allowed))
     if status_:
         query = query.filter(Candidate.status == status_)
     if designation_id is not None:
@@ -244,6 +263,7 @@ def bulk_upload_candidates(file: UploadFile = File(...), db: Session = Depends(g
 
 @router.post("/candidates", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
 def create_candidate(payload: CandidateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _check_applied_scope(db, user, payload.applied_cost_center_id, payload.applied_project_id)
     recruitment_service.validate_unique_identifiers(db, payload.aadhaar, payload.pan, payload.dl_licence_number)
     candidate = Candidate(**payload.model_dump())
     db.add(candidate)
@@ -271,6 +291,8 @@ def update_candidate(candidate_id: int, payload: CandidateIn, db: Session = Depe
     candidate = _get_candidate(db, candidate_id)
     if candidate.status == "CONVERTED":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
+    _check_applied_scope(db, user, candidate.applied_cost_center_id, None)
+    _check_applied_scope(db, user, payload.applied_cost_center_id, payload.applied_project_id)
     recruitment_service.validate_unique_identifiers(
         db, payload.aadhaar, payload.pan, payload.dl_licence_number,
         exclude_candidate_id=candidate.id, exclude_employee_id=candidate.converted_employee_id,

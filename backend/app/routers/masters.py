@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_user, require_hr_admin
 from app.db.session import get_db
 from app.models.enums import Permission
+from app.services import permission_service
 from app.models.models import (
     Company, CostCenter, Project, Department, EmployeeCategory,
     WorkLocation, Designation, EmployeeType, DocumentType, DocumentRequirement,
@@ -101,9 +102,15 @@ def deactivate_company(company_id: int, db: Session = Depends(get_db)):
 
 @router.get("/cost-centers", response_model=list[CostCenterOut])
 def list_cost_centers(include_inactive: bool = False, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Non-admin users only see the Cost Centers they're scoped to
+    (UserCostCenterScope) - this feeds every Cost Center dropdown in the
+    app, so without this a scoped HR user could pick any Cost Center."""
     query = db.query(CostCenter)
     if not include_inactive:
         query = query.filter(CostCenter.is_active.is_(True))
+    allowed = permission_service.user_cost_center_ids(db, user)
+    if allowed is not None:
+        query = query.filter(CostCenter.id.in_(allowed))
     return query.all()
 
 
@@ -165,6 +172,9 @@ def list_projects(include_inactive: bool = False, db: Session = Depends(get_db),
     query = db.query(Project)
     if not include_inactive:
         query = query.filter(Project.is_active.is_(True))
+    allowed = permission_service.user_cost_center_ids(db, user)
+    if allowed is not None:
+        query = query.filter(Project.cost_center_id.in_(allowed))
     return query.all()
 
 
@@ -336,6 +346,10 @@ def list_work_locations(include_inactive: bool = False, db: Session = Depends(ge
     query = db.query(WorkLocation)
     if not include_inactive:
         query = query.filter(WorkLocation.is_active.is_(True))
+    allowed = permission_service.user_cost_center_ids(db, user)
+    if allowed is not None:
+        # A Location belongs to a Project, which belongs to a Cost Center.
+        query = query.join(Project, Project.id == WorkLocation.project_id).filter(Project.cost_center_id.in_(allowed))
     return query.all()
 
 

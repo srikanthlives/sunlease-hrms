@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.validators import validate_aadhaar, validate_mobile, validate_pan
 from app.models.enums import AuditAction
 from app.models.models import Candidate, CostCenter, Designation, EmployeeCategory, Project, User
-from app.services import audit_service, recruitment_service
+from app.services import audit_service, permission_service, recruitment_service
 
 COLUMNS = [
     ("first_name", "First Name*"),
@@ -170,6 +170,7 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
 
     created = 0
     errors = []
+    allowed_cost_centers = permission_service.user_cost_center_ids(db, actor)
 
     for row_number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
         if row is None or all(v is None or str(v).strip() == "" for v in row):
@@ -210,6 +211,10 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
         project = _lookup(db, Project, applied_project_name)
         if not project:
             errors.append({"row": row_number, "message": f"Applied Project '{applied_project_name or ''}' not found in Organization Setup"})
+            continue
+
+        if allowed_cost_centers is not None and (cost_center.id not in allowed_cost_centers or project.cost_center_id not in allowed_cost_centers):
+            errors.append({"row": row_number, "message": "You are not assigned to this Cost Center/Project"})
             continue
 
         savepoint = db.begin_nested()
