@@ -169,12 +169,14 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
                 break
 
     created = 0
+    total_rows = 0
     errors = []
     allowed_cost_centers = permission_service.user_cost_center_ids(db, actor)
 
     for row_number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
         if row is None or all(v is None or str(v).strip() == "" for v in row):
             continue  # skip blank rows
+        total_rows += 1
 
         data = {}
         for idx, value in enumerate(row):
@@ -278,4 +280,8 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
             savepoint.rollback()
             errors.append({"row": row_number, "message": str(exc.__cause__ or exc) if isinstance(exc, IntegrityError) else str(exc)})
 
-    return {"created": created, "errors": errors}
+    if errors:
+        # All-or-nothing: one bad row means none of the file is saved.
+        db.rollback()
+        return {"created": 0, "errors": errors, "rolled_back": True, "valid_rows": total_rows - len(errors)}
+    return {"created": created, "errors": [], "rolled_back": False, "valid_rows": total_rows}

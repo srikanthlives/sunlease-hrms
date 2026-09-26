@@ -352,8 +352,8 @@ export default function Candidates() {
               Each row creates a new candidate — same as "New Candidate" — with Personal Info, Identity Documents,
               Current Experience, Applied Designation/Cost Center/Category/Project, and Driving Licence details
               filled in. Documents and Selection Criteria are completed afterwards per-candidate on the Candidate
-              Detail page. Rows with an Aadhaar/PAN/Driving Licence Number that already belongs to another
-              candidate or employee are skipped with an error, same as adding one candidate manually.
+              Detail page. The upload is all-or-nothing: if any row has an error (for example an Aadhaar/PAN/Driving Licence Number
+              that already belongs to another candidate or employee), nothing is saved until every row is corrected.
             </p>
 
             <Button variant="outline" size="sm" onClick={downloadCandidateTemplate} className="gap-1.5 mb-4">
@@ -364,10 +364,16 @@ export default function Candidates() {
 
             {bulkResult && (
               <div className="mb-4 text-sm">
-                <div className="text-ok font-medium mb-1">{bulkResult.created} created.</div>
+                {bulkResult.rolled_back ? (
+                  <div className="text-danger font-medium mb-1">
+                    Nothing was saved. {bulkResult.errors.length} row(s) have errors ({bulkResult.valid_rows} other row(s) are fine) — correct the file and upload it again; candidates are added only when every row is valid.
+                  </div>
+                ) : (
+                  <div className="text-ok font-medium mb-1">{bulkResult.created} created.</div>
+                )}
                 {bulkResult.errors.length > 0 && (
                   <div className="border border-danger/20 bg-danger/5 rounded-md p-2 max-h-40 overflow-y-auto">
-                    <div className="text-xs font-medium text-danger mb-1">{bulkResult.errors.length} row(s) skipped:</div>
+                    <div className="text-xs font-medium text-danger mb-1">{bulkResult.errors.length} row(s) to fix:</div>
                     {bulkResult.errors.map((e, i) => (
                       <div key={i} className="text-xs text-ink/60">Row {e.row}: {e.message}</div>
                     ))}

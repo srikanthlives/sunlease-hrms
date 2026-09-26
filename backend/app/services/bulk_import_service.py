@@ -409,11 +409,13 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
     created = 0
     updated = 0
     submitted_for_approval = 0
+    total_rows = 0
     errors = []
 
     for row_number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
         if row is None or all(v is None or str(v).strip() == "" for v in row):
             continue  # skip blank rows
+        total_rows += 1
 
         data = {}
         for idx, value in enumerate(row):
@@ -579,4 +581,10 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
             savepoint.rollback()
             errors.append({"row": row_number, "message": str(exc.__cause__ or exc) if isinstance(exc, IntegrityError) else str(exc)})
 
-    return {"created": created, "updated": updated, "submitted_for_approval": submitted_for_approval, "errors": errors}
+    if errors:
+        # All-or-nothing: one bad row means none of the file is saved (the
+        # per-row savepoints only isolate each row's failure while the file
+        # is being checked). The caller sees exactly which rows to fix.
+        db.rollback()
+        return {"created": 0, "updated": 0, "submitted_for_approval": 0, "errors": errors, "rolled_back": True, "valid_rows": total_rows - len(errors)}
+    return {"created": created, "updated": updated, "submitted_for_approval": submitted_for_approval, "errors": [], "rolled_back": False, "valid_rows": total_rows}

@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_hr_admin, require_permission
-from app.db.session import get_db
+from app.db.session import atomic_session, get_db
 from app.models.enums import AuditAction, Permission
 from app.models.models import (
     Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
@@ -270,10 +270,11 @@ def download_candidates_bulk_upload_template(db: Session = Depends(get_db)):
 
 
 @router.post("/candidates-bulk-upload", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
-def bulk_upload_candidates(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def bulk_upload_candidates(file: UploadFile = File(...), user: User = Depends(get_current_user)):
     content = file.file.read()
-    result = candidate_bulk_import_service.import_candidates_workbook(db, content, user)
-    db.commit()
+    with atomic_session() as db:  # all-or-nothing: any bad row rolls the whole file back
+        result = candidate_bulk_import_service.import_candidates_workbook(db, content, user)
+        db.commit()
     return result
 
 

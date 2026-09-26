@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.core.deps import get_current_user, require_permission
-from app.db.session import get_db
+from app.db.session import atomic_session, get_db
 from app.models.enums import AddressType, AuditAction, EpisodeStatus, Permission, RoleName, TransactionType
 from app.models.models import (
     Employee, Address, EmploymentEpisode, StatutoryInfo, BankAccount, Dependent, Nominee,
@@ -145,15 +145,16 @@ def download_bulk_upload_template(db: Session = Depends(get_db)):
 
 
 @router.post("-bulk-upload", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
-def bulk_upload_employees(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def bulk_upload_employees(file: UploadFile = File(...), user: User = Depends(get_current_user)):
     """Each valid row creates a Draft Employee + EmploymentEpisode - same
     starting point as clicking "New Employee" once per row, with as much
     of Personal/Address/Employment/Organizational Assignment filled in as
     the row provides. Statutory/Bank/Documents/Dependents/Nominees/Driving
     Licence are completed per-employee afterwards via the wizard."""
     content = file.file.read()
-    result = bulk_import_service.import_workbook(db, content, user)
-    db.commit()
+    with atomic_session() as db:  # all-or-nothing: any bad row rolls the whole file back
+        result = bulk_import_service.import_workbook(db, content, user)
+        db.commit()
     return result
 
 

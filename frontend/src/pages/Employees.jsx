@@ -345,7 +345,7 @@ export default function Employees() {
             <p className="text-xs text-ink/50 mb-4">
               Each row creates a Draft employee — same starting point as "New Employee" — with Personal, Address,
               Employment, and Organizational Assignment fields filled in. Statutory, Bank, Documents, Dependents,
-              Nominees, and Driving Licence are completed afterwards per-employee in the wizard.
+              Nominees, and Driving Licence are completed afterwards per-employee in the wizard. The upload is all-or-nothing: if any row has an error, nothing is saved until every row is corrected.
             </p>
 
             <Button variant="outline" size="sm" onClick={downloadTemplate} className="gap-1.5 mb-4">
@@ -356,12 +356,18 @@ export default function Employees() {
 
             {bulkResult && (
               <div className="mb-4 text-sm">
-                <div className="text-ok font-medium mb-1">
-                  {bulkResult.created} created, {bulkResult.updated || 0} updated, {bulkResult.submitted_for_approval || 0} submitted for approval.
-                </div>
+                {bulkResult.rolled_back ? (
+                  <div className="text-danger font-medium mb-1">
+                    Nothing was saved. {bulkResult.errors.length} row(s) have errors ({bulkResult.valid_rows} other row(s) are fine) — correct the file and upload it again; employees are added or updated only when every row is valid.
+                  </div>
+                ) : (
+                  <div className="text-ok font-medium mb-1">
+                    {bulkResult.created} created, {bulkResult.updated || 0} updated, {bulkResult.submitted_for_approval || 0} submitted for approval.
+                  </div>
+                )}
                 {bulkResult.errors.length > 0 && (
                   <div className="border border-danger/20 bg-danger/5 rounded-md p-2 max-h-40 overflow-y-auto">
-                    <div className="text-xs font-medium text-danger mb-1">{bulkResult.errors.length} row(s) skipped:</div>
+                    <div className="text-xs font-medium text-danger mb-1">{bulkResult.errors.length} row(s) to fix:</div>
                     {bulkResult.errors.map((e, i) => (
                       <div key={i} className="text-xs text-ink/60">Row {e.row}: {e.message}</div>
                     ))}
