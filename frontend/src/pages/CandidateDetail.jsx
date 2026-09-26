@@ -4,6 +4,7 @@ import { Paperclip, Upload } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
+import { useAuth } from "../context/AuthContext";
 
 const RESULT_OPTIONS = ["PENDING", "PASS", "FAIL", "EXCEPTION"];
 
@@ -31,6 +32,7 @@ const EDIT_FIELDS = [
 export default function CandidateDetail() {
   const { candidateId } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [candidate, setCandidate] = useState(null);
   const [designations, setDesignations] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -200,6 +202,18 @@ export default function CandidateDetail() {
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteCandidate() {
+    if (!window.confirm(`Permanently delete ${candidate.first_name} ${candidate.last_name} (${candidate.reference_number})? Their documents and test results are removed too. This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await client.delete(`/recruitment/candidates/${candidateId}`);
+      navigate("/recruitment/candidates");
+    } catch (err) {
+      setError(apiErrorMessage(err));
       setBusy(false);
     }
   }
@@ -422,6 +436,9 @@ export default function CandidateDetail() {
           )}
           {isTerminal && (
             <Button variant="accent" onClick={requalifyCandidate} disabled={busy}>Requalify Candidate</Button>
+          )}
+          {isApplied && (user?.role === "HR_ADMIN" || user?.role === "SUPER_ADMIN") && (
+            <Button variant="danger" onClick={deleteCandidate} disabled={busy}>Delete Candidate</Button>
           )}
         </div>
         {isApplied && <p className="text-xs text-ink/40 mt-2">Selection Criteria can't be recorded until this candidate is approved.</p>}

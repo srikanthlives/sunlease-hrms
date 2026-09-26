@@ -1,5 +1,6 @@
 import io
 import json
+import os
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -406,15 +407,28 @@ def reject_candidate_submission(candidate_id: int, db: Session = Depends(get_db)
     return {"ok": True, "status": candidate.status}
 
 
-@router.delete("/candidates/{candidate_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+@router.delete("/candidates/{candidate_id}", dependencies=[Depends(require_hr_admin)])
 def delete_candidate(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """HR Admin / Super Admin only, and only for a candidate still in
+    Applied - nothing has been submitted or approved yet, so there's
+    nothing to lose. Anyone further along should be Disqualified instead
+    (keeps the record). Removes everything attached to the candidate:
+    documents and their files, test results and their proof files, and
+    any change requests."""
     candidate = _get_candidate(db, candidate_id)
-    if candidate.status == "CONVERTED":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A converted candidate cannot be deleted")
+    if candidate.status != "APPLIED":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only an Applied candidate can be deleted - use Disqualify for one that has progressed")
     for doc in list(candidate.documents):
         document_service.delete_candidate_document(db, doc)
-    db.delete(candidate)
-    audit_service.record(db, "CANDIDATE", candidate_id, AuditAction.UPDATE, user, old_value="deleted")
+    for result in list(candidate.stage_results):
+        if result.attachment_object_key:
+            path = recruitment_service.stage_result_attachment_path(result)
+            if os.path.exists(path):
+                os.remove(path)
+    db.query(CandidateChangeRequest).filter(CandidateChangeRequest.candidate_id == candidate.id).delete(synchronize_session=False)
+    reference = candidate.reference_number
+    db.delete(candidate)  # stage results cascade with the candidate
+    audit_service.record(db, "CANDIDATE", candidate_id, AuditAction.UPDATE, user, old_value=f"deleted {reference}")
     db.commit()
     return {"ok": True}
 
