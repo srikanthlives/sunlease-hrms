@@ -20,7 +20,7 @@ from app.models.models import (
 from app.schemas.employees import (
     PersonalInfoStep, AddressStep, EmploymentInfoStep, OrgAssignmentStep, CostAllocationIn,
     StatutoryInfoStep, BankAccountStep, DependentIn, NomineeIn, SeparationIn, SeparationChecklistUpdate,
-    ChangeRequestReview, DrivingLicenceStep,
+    ChangeRequestReview, DrivingLicenceStep, RejoinIn,
 )
 from app.services import (
     audit_service, employee_service, approval_service, permission_service,
@@ -223,6 +223,14 @@ def list_employees(
     allocation_by_episode: dict[int, CostAllocation] = {}
     for alloc in open_allocations:
         allocation_by_episode.setdefault(alloc.episode_id, alloc)
+    # A Separated stint's assignments are closed at exit - show (and scope
+    # by) the Cost Center/Department it last had instead of blanks.
+    separated_ids = [e.id for e in episodes if e.status == EpisodeStatus.SEPARATED and e.id not in assignment_by_episode]
+    if separated_ids:
+        for a in db.query(OrgAssignment).filter(OrgAssignment.episode_id.in_(separated_ids)).order_by(OrgAssignment.effective_from, OrgAssignment.id).all():
+            assignment_by_episode[a.episode_id] = a
+        for al in db.query(CostAllocation).filter(CostAllocation.episode_id.in_(separated_ids)).order_by(CostAllocation.effective_from, CostAllocation.id).all():
+            allocation_by_episode[al.episode_id] = al
     cost_centers = {c.id: c.name for c in db.query(CostCenter.id, CostCenter.name).all()}
     departments = {d.id: d.name for d in db.query(Department.id, Department.name).all()}
 
@@ -254,6 +262,7 @@ def list_employees(
             "employee_category": e.employee_category.name if e.employee_category else None,
             "date_of_joining": e.date_of_joining,
             "separation_date": e.separation_date,
+            "rejoined": e.previous_episode_id is not None,
             "work_location": e.work_location.name if e.work_location else None,
             "cost_center": cost_centers.get(cc_id),
             "department": departments.get(assignment.department_id) if assignment else None,
@@ -362,6 +371,8 @@ def build_employee_detail(db: Session, user: User, episode: EmploymentEpisode) -
             } for d in episode.documents
         ],
         "separation": _separation_dict(episode),
+        "rejoined": episode.previous_episode_id is not None,
+        "previous_employment": _previous_employment(db, user, episode),
     }
     return permission_service.mask_sensitive_fields(db, user, detail)
 
@@ -417,7 +428,9 @@ def save_employment_info(episode_id: int, payload: EmploymentInfoStep, db: Sessi
             EmploymentEpisode.employee_number == payload.employee_number,
             EmploymentEpisode.id != episode.id,
         ).first()
-        if existing:
+        # Only the same person's own earlier (Separated) stint may share a
+        # number; anyone else's episode - live or separated - is a clash.
+        if existing and not (existing.employee_id == episode.employee_id and existing.status == EpisodeStatus.SEPARATED):
             raise HTTPException(status.HTTP_409_CONFLICT, "Employee Number already in use")
 
     return _save_or_request(db, episode, TransactionType.EMPLOYMENT_CHANGE, payload.model_dump(), user)
@@ -724,6 +737,34 @@ def reject_employee(episode_id: int, db: Session = Depends(get_db), user: User =
     return _transition(db, episode, EpisodeStatus.PENDING_APPROVAL, EpisodeStatus.DRAFT, user)
 
 
+def _previous_employment(db: Session, user: User, episode: EmploymentEpisode) -> list[dict]:
+    """Every OTHER stint of this same person (earlier and later), oldest
+    first. A stint in a Cost Center the viewer isn't scoped to is listed
+    without a drill-in (can_open false) - the fact of past service is shown,
+    its details aren't."""
+    others = (
+        db.query(EmploymentEpisode)
+        .filter(EmploymentEpisode.employee_id == episode.employee_id, EmploymentEpisode.id != episode.id,
+                EmploymentEpisode.status != EpisodeStatus.DRAFT)
+        .order_by(EmploymentEpisode.date_of_joining, EmploymentEpisode.id).all()
+    )
+    cost_centers = {c.id: c.name for c in db.query(CostCenter.id, CostCenter.name).all()}
+    out = []
+    for e in others:
+        cc_id = employee_service.last_cost_center_id(db, e.id)
+        sep = e.separation
+        out.append({
+            "episode_id": e.id, "employee_number": e.employee_number, "status": e.status,
+            "date_of_joining": e.date_of_joining, "separation_date": e.separation_date,
+            "separation_reason": e.separation_reason, "separation_type": sep.separation_type if sep else None,
+            "designation": e.designation.name if e.designation else None,
+            "employee_category": e.employee_category.name if e.employee_category else None,
+            "cost_center": cost_centers.get(cc_id),
+            "can_open": permission_service.can_see_cost_center(db, user, cc_id),
+        })
+    return out
+
+
 def _separation_dict(episode: EmploymentEpisode) -> dict | None:
     r = episode.separation
     if not r:
@@ -795,9 +836,28 @@ def complete_separation(episode_id: int, db: Session = Depends(get_db), user: Us
     old_status = episode.status
     episode.status = EpisodeStatus.SEPARATED
     db.add(episode)
+    employee_service.close_assignments_at_exit(db, episode)
+    employee_service.disable_self_service_login(db, episode.employee_id)
     audit_service.record(db, "EMPLOYMENT_EPISODE", episode.id, AuditAction.STATUS_CHANGE, user, old_value=old_status, new_value=episode.status)
     db.commit()
     return {"ok": True, "status": episode.status}
+
+
+@router.post("/{episode_id}/rejoin", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
+def rejoin_employee(episode_id: int, payload: RejoinIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Starts a new stint for a fully Separated employee - same person, same
+    employee number, new joining date, as a DRAFT that goes through the
+    normal wizard and approval. The old stint stays as history. Needs access
+    to the Cost Center the person last belonged to."""
+    prior = _get_episode(db, episode_id)
+    _check_scope(db, user, prior)
+    new = employee_service.create_rejoin_episode(db, prior, payload.date_of_joining, user)
+    audit_service.record(
+        db, "EMPLOYMENT_EPISODE", new.id, AuditAction.CREATE, user,
+        new_value=f"rejoin of episode {prior.id} ({prior.employee_number}) from {payload.date_of_joining}",
+    )
+    db.commit()
+    return {"employee_id": new.employee_id, "episode_id": new.id}
 
 
 @router.post("/{episode_id}/separation/cancel", dependencies=[Depends(require_permission(Permission.EMPLOYEE_SEPARATE))])

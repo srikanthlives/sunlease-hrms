@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.models import AdhocPayEntry, EmploymentEpisode, SalaryComponent, User
-from app.services import payroll_service
+from app.services import employee_service, payroll_service
 
 # ---------------------------------------------------------------------------
 # Salary structure bulk assignment
@@ -119,7 +119,7 @@ def import_structure_workbook(db: Session, file_bytes: bytes, actor: User) -> di
 
         savepoint = db.begin_nested()
         try:
-            episode = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first()
+            episode = employee_service.find_episode_by_number(db, employee_number)
             if not episode:
                 raise ValueError(f"Employee Number '{employee_number}' not found")
 
@@ -215,7 +215,7 @@ def import_adhoc_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
 
         savepoint = db.begin_nested()
         try:
-            episode = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first()
+            episode = employee_service.find_episode_by_number(db, employee_number)
             if not episode:
                 raise ValueError(f"Employee Number '{employee_number}' not found")
 

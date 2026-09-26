@@ -46,6 +46,8 @@ export default function CandidateDetail() {
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [testedOnByCriteria, setTestedOnByCriteria] = useState({});
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferForm, setTransferForm] = useState({ applied_cost_center_id: "", applied_project_id: "", remarks: "" });
 
   function reload() {
     client.get(`/recruitment/candidates/${candidateId}`)
@@ -180,6 +182,28 @@ export default function CandidateDetail() {
     }
   }
 
+  async function transferCandidate() {
+    setError("");
+    setBusy(true);
+    try {
+      const res = await client.post(`/recruitment/candidates/${candidateId}/transfer`, {
+        applied_cost_center_id: Number(transferForm.applied_cost_center_id),
+        applied_project_id: Number(transferForm.applied_project_id),
+        remarks: transferForm.remarks || null,
+      });
+      if (res.data.submitted_for_approval) {
+        window.alert("This candidate is already Approved — the transfer was submitted as a Change Request and needs approval before it takes effect.");
+      }
+      setTransferOpen(false);
+      setTransferForm({ applied_cost_center_id: "", applied_project_id: "", remarks: "" });
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function requalifyCandidate() {
     const message = candidate.status === "CONVERTED"
       ? "Requalify this candidate? Use this if they've resigned/separated and are reapplying — they'll go back to Applied and re-enter the full selection pipeline."
@@ -279,7 +303,9 @@ export default function CandidateDetail() {
     setError("");
     setBusy(true);
     try {
-      const res = await client.post(`/recruitment/candidates/${candidateId}/convert`, convertForm);
+      const res = await client.post(`/recruitment/candidates/${candidateId}/convert`, {
+        ...convertForm, employee_number: candidate.rejoin_employee_number || convertForm.employee_number,
+      });
       navigate(`/employees/${res.data.episode_id}/wizard`);
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -389,6 +415,9 @@ export default function CandidateDetail() {
             </>
           )}
           {!isTerminal && (
+            <Button variant="outline" onClick={() => setTransferOpen((o) => !o)} disabled={busy}>Transfer Candidate</Button>
+          )}
+          {!isTerminal && (
             <Button variant="danger" onClick={disqualifyCandidate} disabled={busy}>Disqualify Candidate</Button>
           )}
           {isTerminal && (
@@ -398,6 +427,31 @@ export default function CandidateDetail() {
         {isApplied && <p className="text-xs text-ink/40 mt-2">Selection Criteria can't be recorded until this candidate is approved.</p>}
         {isRejected && <p className="text-xs text-ink/40 mt-2">Disqualified — Requalify to reconsider this candidate; they'll re-enter the pipeline at Applied.</p>}
         {isConverted && <p className="text-xs text-ink/40 mt-2">Converted to employee — Requalify only if this person has since resigned/separated and is reapplying as a new candidate.</p>}
+        {transferOpen && !isTerminal && (
+          <div className="mt-4 border-t border-ink/10 pt-4">
+            <p className="text-xs text-ink/50 mb-2">
+              Currently in <strong>{candidate.cost_center_name}</strong>{candidate.applied_project_name ? ` / ${candidate.applied_project_name}` : ""}.
+              The reference number <strong>{candidate.reference_number}</strong> stays the same after the transfer.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <Select label="Transfer to Cost Center*" value={transferForm.applied_cost_center_id}
+                onChange={(e) => setTransferForm({ ...transferForm, applied_cost_center_id: e.target.value, applied_project_id: "" })}>
+                <option value="">Select...</option>
+                {costCenters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+              <Select label="Project*" value={transferForm.applied_project_id}
+                onChange={(e) => setTransferForm({ ...transferForm, applied_project_id: e.target.value })}>
+                <option value="">Select...</option>
+                {projects.filter((p) => String(p.cost_center_id) === String(transferForm.applied_cost_center_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Select>
+              <Input label="Remarks" value={transferForm.remarks} onChange={(e) => setTransferForm({ ...transferForm, remarks: e.target.value })} />
+            </div>
+            <div className="flex gap-2 mt-3">
+              <Button onClick={transferCandidate} disabled={busy || !transferForm.applied_cost_center_id || !transferForm.applied_project_id}>Confirm Transfer</Button>
+              <Button variant="outline" onClick={() => setTransferOpen(false)} disabled={busy}>Cancel</Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card>
@@ -574,16 +628,24 @@ export default function CandidateDetail() {
         <Card>
           <h2 className="text-sm font-semibold text-ink mb-3">Convert to Employee</h2>
           <div className="grid grid-cols-3 gap-2">
-            <Input label="Employee Number" value={convertForm.employee_number} onChange={(e) => setConvertForm({ ...convertForm, employee_number: e.target.value })} />
+            <Input
+              label="Employee Number"
+              value={candidate.rejoin_employee_number || convertForm.employee_number}
+              disabled={!!candidate.rejoin_employee_number}
+              onChange={(e) => setConvertForm({ ...convertForm, employee_number: e.target.value })}
+            />
             <Input type="date" label="Date of Joining" value={convertForm.date_of_joining} onChange={(e) => setConvertForm({ ...convertForm, date_of_joining: e.target.value })} />
           </div>
           <Button
             className="mt-3"
             onClick={convert}
-            disabled={busy || !candidate.all_mandatory_passed || !convertForm.employee_number || !convertForm.date_of_joining}
+            disabled={busy || !candidate.all_mandatory_passed || !(candidate.rejoin_employee_number || convertForm.employee_number) || !convertForm.date_of_joining}
           >
             {busy ? "Converting…" : "Convert to Employee"}
           </Button>
+          {candidate.rejoin_employee_number && (
+            <p className="text-xs text-ink/50 mt-2">Rejoining employee — keeps employee number {candidate.rejoin_employee_number} and is attached to their existing record as a new period of service (their earlier employment stays as history).</p>
+          )}
           {!candidate.all_mandatory_passed && (
             <p className="text-xs text-ink/40 mt-2">Blocked until every mandatory selection criteria above is marked PASS or EXCEPTION.</p>
           )}

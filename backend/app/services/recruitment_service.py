@@ -49,12 +49,18 @@ def generate_reference_number(db: Session, candidate: Candidate) -> str:
     )
     sequence = scope_query.count() + 1
 
-    parts = [company_code, cost_center_code]
+    prefix = [company_code, cost_center_code]
     if project_code:
-        parts.append(project_code)
-    parts.append(category_segment)
-    parts.append(f"{sequence:03d}")
-    return "/".join(parts)
+        prefix.append(project_code)
+    prefix.append(category_segment)
+    # Candidates can leave a scope (Cost Center/Project edit or transfer)
+    # while keeping their reference number, so count+1 may already be
+    # taken - skip forward until it's free.
+    while True:
+        reference = "/".join(prefix + [f"{sequence:03d}"])
+        if not db.query(Candidate.id).filter(Candidate.reference_number == reference, Candidate.id != candidate.id).first():
+            return reference
+        sequence += 1
 
 
 def required_criteria(db: Session, designation_id: int, cost_center_id: int | None) -> list[DesignationCriteria]:
@@ -422,24 +428,38 @@ def convert_to_employee(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Candidate must be approved before conversion to employee")
     if not all_mandatory_passed(db, candidate):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has not passed (or been marked EXCEPTION for) all mandatory selection criteria yet")
-    if db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first():
+    # A requalified candidate who was previously converted is a REJOINER:
+    # re-attach to the same Employee (never a duplicate person) and reuse
+    # their employee number on a new stint. Identity fields on the existing
+    # Employee are left as they are.
+    prior = None
+    employee = db.query(Employee).filter(Employee.id == candidate.converted_employee_id).first() if candidate.converted_employee_id else None
+    if employee:
+        prior = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == employee.id).order_by(EmploymentEpisode.id.desc()).first()
+        if prior and prior.status != "SEPARATED":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This person still has a current employment record - they must be Separated before rejoining")
+        if prior:
+            employee_number = prior.employee_number
+    clash = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first()
+    if clash and not (employee and clash.employee_id == employee.id):
         raise HTTPException(status.HTTP_409_CONFLICT, "Employee Number already in use")
 
-    employee = Employee(
-        first_name=candidate.first_name, middle_name=candidate.middle_name, last_name=candidate.last_name,
-        father_husband_name=candidate.father_husband_name, gender=candidate.gender, date_of_birth=candidate.date_of_birth,
-        mobile_number=candidate.mobile_number, alternate_mobile_number=candidate.alternate_mobile_number,
-        personal_email=candidate.personal_email, educational_qualification=candidate.educational_qualification,
-        total_experience_years=candidate.total_experience_years,
-        aadhaar=candidate.aadhaar, aadhaar_name=candidate.aadhaar_name, aadhaar_dob=candidate.aadhaar_dob,
-        pan=candidate.pan, pan_name=candidate.pan_name, pan_dob=candidate.pan_dob,
-        # The candidate's CURRENT employer at application time becomes
-        # their PREVIOUS employer once they're hired here.
-        previous_designation=candidate.current_designation, previous_company_name=candidate.current_company_name,
-        previous_company_details=candidate.current_company_details, previous_date_of_joining=candidate.current_date_of_joining,
-    )
-    db.add(employee)
-    db.flush()
+    if not employee:
+        employee = Employee(
+            first_name=candidate.first_name, middle_name=candidate.middle_name, last_name=candidate.last_name,
+            father_husband_name=candidate.father_husband_name, gender=candidate.gender, date_of_birth=candidate.date_of_birth,
+            mobile_number=candidate.mobile_number, alternate_mobile_number=candidate.alternate_mobile_number,
+            personal_email=candidate.personal_email, educational_qualification=candidate.educational_qualification,
+            total_experience_years=candidate.total_experience_years,
+            aadhaar=candidate.aadhaar, aadhaar_name=candidate.aadhaar_name, aadhaar_dob=candidate.aadhaar_dob,
+            pan=candidate.pan, pan_name=candidate.pan_name, pan_dob=candidate.pan_dob,
+            # The candidate's CURRENT employer at application time becomes
+            # their PREVIOUS employer once they're hired here.
+            previous_designation=candidate.current_designation, previous_company_name=candidate.current_company_name,
+            previous_company_details=candidate.current_company_details, previous_date_of_joining=candidate.current_date_of_joining,
+        )
+        db.add(employee)
+        db.flush()
 
     episode = EmploymentEpisode(
         employee_id=employee.id, employee_number=employee_number,
@@ -447,6 +467,7 @@ def convert_to_employee(
         designation_id=candidate.applied_designation_id, work_location_id=work_location_id,
         date_of_joining=date_of_joining, confirmation_date=confirmation_date,
         application_reference_number=candidate.reference_number,
+        previous_episode_id=prior.id if prior else None,
         status="DRAFT",
     )
     db.add(episode)

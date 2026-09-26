@@ -213,6 +213,10 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
             errors.append({"row": row_number, "message": f"Applied Project '{applied_project_name or ''}' not found in Organization Setup"})
             continue
 
+        if project.cost_center_id != cost_center.id:
+            errors.append({"row": row_number, "message": f"Project '{project.name}' does not belong to Cost Center '{cost_center.name}'"})
+            continue
+
         if allowed_cost_centers is not None and (cost_center.id not in allowed_cost_centers or project.cost_center_id not in allowed_cost_centers):
             errors.append({"row": row_number, "message": "You are not assigned to this Cost Center/Project"})
             continue

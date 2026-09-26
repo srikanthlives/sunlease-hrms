@@ -188,7 +188,10 @@ def _employee_upload_dir(db: Session, episode: EmploymentEpisode) -> str:
         cc = db.query(CostCenter).filter(CostCenter.id == cc_id).first()
         if cc and cc.company:
             company_name = cc.company.name
-    return os.path.join(settings.UPLOAD_DIR, _slug(company_name), episode.employee_number)
+    base = os.path.join(settings.UPLOAD_DIR, _slug(company_name), episode.employee_number)
+    # A rejoin stint keeps the same employee number, so give it its own folder -
+    # same-named documents must not overwrite the earlier stint's files.
+    return os.path.join(base, f"rejoin-{episode.id}") if episode.previous_episode_id else base
 
 
 def save_upload(db: Session, episode: EmploymentEpisode, document_type_id: int, upload_file: UploadFile, actor: User) -> DocumentMeta:

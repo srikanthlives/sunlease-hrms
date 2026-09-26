@@ -33,6 +33,9 @@ export default function EmployeeProfile() {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [loginPin, setLoginPin] = useState(null);
   const [loginBusy, setLoginBusy] = useState(false);
+  const [rejoinOpen, setRejoinOpen] = useState(false);
+  const [rejoinDate, setRejoinDate] = useState("");
+  const [rejoinBusy, setRejoinBusy] = useState(false);
 
   function reload() {
     client.get(`/employees/${episodeId}`).then((res) => {
@@ -106,6 +109,20 @@ export default function EmployeeProfile() {
     a.download = fileName || "document";
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function startRejoin() {
+    setRejoinBusy(true);
+    setError("");
+    try {
+      const res = await client.post(`/employees/${episodeId}/rejoin`, { date_of_joining: rejoinDate });
+      setRejoinOpen(false);
+      navigate(`/employees/${res.data.episode_id}/wizard`);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setRejoinBusy(false);
+    }
   }
 
   async function act(action) {
@@ -202,6 +219,7 @@ export default function EmployeeProfile() {
             <h1 className="text-xl font-display font-semibold text-ink">{employee.first_name} {employee.last_name}</h1>
             <p className="text-sm text-ink/50 mt-1">
               {episode.employee_number} · {episode.designation || "—"} · <StatusBadge status={episode.status} />
+              {detail.rejoined && <span className="ml-2 text-[11px] font-medium uppercase tracking-wide text-accent-600">Rejoined</span>}
             </p>
           </div>
         </div>
@@ -218,6 +236,9 @@ export default function EmployeeProfile() {
           {episode.status !== "DRAFT" && episode.status !== "SEPARATED" && (user?.role === "HR_ADMIN" || can("employee.edit")) && (
             <Button variant="outline" onClick={() => navigate(`/employees/${episodeId}/wizard`)}>Edit</Button>
           )}
+          {episode.status === "SEPARATED" && can("employee.create") && (
+            <Button variant="accent" onClick={() => { setRejoinDate(""); setRejoinOpen(true); }}>Rejoin</Button>
+          )}
           {episode.status !== "DRAFT" && (user?.role === "HR_ADMIN" || user?.role === "SUPER_ADMIN") && (
             <Button variant="outline" onClick={resetLogin} disabled={loginBusy}>
               {loginBusy ? "Working…" : "Reset Self-Service Login"}
@@ -225,6 +246,24 @@ export default function EmployeeProfile() {
           )}
         </div>
       </div>
+      {rejoinOpen && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setRejoinOpen(false)}>
+          <div className="bg-white rounded-lg p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-2">Rejoin {employee.first_name} {employee.last_name}</h3>
+            <p className="text-xs text-ink/50 mb-3">
+              Starts a new employment record for the same person, keeping employee number <strong>{episode.employee_number}</strong>.
+              This record (exit {formatDate(episode.separation_date)}) stays as history. The two periods are separate service —
+              nothing carries over. Bank, PF/ESI numbers, dependents, nominees and driving licence are copied as editable
+              starting points; salary, attendance, leave and Cost Center assignment start fresh.
+            </p>
+            <Input type="date" label="New Joining Date*" value={rejoinDate} onChange={(e) => setRejoinDate(e.target.value)} />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setRejoinOpen(false)} disabled={rejoinBusy}>Cancel</Button>
+              <Button onClick={startRejoin} disabled={!rejoinDate || rejoinBusy}>{rejoinBusy ? "Creating…" : "Start Rejoin"}</Button>
+            </div>
+          </div>
+        </div>
+      )}
       {loginPin && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setLoginPin(null)}>
           <div className="bg-white rounded-lg p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
@@ -257,7 +296,29 @@ export default function EmployeeProfile() {
 
       <Card>
         {tab === "Overview" && (
-          <EmployeeReviewSummary detail={detail} onPreviewDocument={(doc) => setPreviewDoc(doc)} />
+          <>
+            {detail.previous_employment?.length > 0 && (
+              <div className="mb-5 border border-ink/10 rounded-md p-3 bg-ink/[0.02]">
+                <div className="text-xs font-semibold uppercase tracking-wide text-ink/40 mb-2">Employment History (same person, separate periods of service)</div>
+                <div className="space-y-1">
+                  {detail.previous_employment.map((p) => (
+                    <div key={p.episode_id} className="flex flex-wrap items-center gap-x-3 text-sm text-ink/70">
+                      <span className="font-medium">{p.employee_number}</span>
+                      <span>{formatDate(p.date_of_joining)} → {p.separation_date ? formatDate(p.separation_date) : "present"}</span>
+                      <span>{p.cost_center || "—"}{p.designation ? ` · ${p.designation}` : ""}</span>
+                      <StatusBadge status={p.status} />
+                      {p.separation_type && <span className="text-xs text-ink/40">{p.separation_type.replace(/_/g, " ")}{p.separation_reason ? ` — ${p.separation_reason}` : ""}</span>}
+                      {p.can_open
+                        ? <button className="text-xs underline text-brand-700" onClick={() => navigate(`/employees/${p.episode_id}`)}>Open</button>
+                        : <span className="text-xs text-ink/30">outside your Cost Center scope</span>}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-ink/40 mt-2">Attendance, salary and payslips are kept per period — open a period above to see them.</p>
+              </div>
+            )}
+            <EmployeeReviewSummary detail={detail} onPreviewDocument={(doc) => setPreviewDoc(doc)} />
+          </>
         )}
 
         {tab === "Personal" && (

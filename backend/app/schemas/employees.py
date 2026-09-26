@@ -193,6 +193,10 @@ class ChangeRequestReview(BaseModel):
     remarks: str | None = None
 
 
+class RejoinIn(BaseModel):
+    date_of_joining: date
+
+
 class SeparationIn(BaseModel):
     separation_type: str | None = None
     resignation_date: date | None = None

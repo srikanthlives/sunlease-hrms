@@ -429,7 +429,7 @@ def import_workbook(db: Session, file_bytes: bytes, actor: User) -> dict:
 
         savepoint = db.begin_nested()
         try:
-            existing_episode = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first()
+            existing_episode = employee_service.find_episode_by_number(db, employee_number)
             if existing_episode:
                 outcome = _update_existing_row(db, existing_episode, data, actor)
                 savepoint.commit()

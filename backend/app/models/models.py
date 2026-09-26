@@ -2,7 +2,7 @@ import datetime as dt
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text,
-    Time, UniqueConstraint,
+    Time, UniqueConstraint, Index, text,
 )
 from sqlalchemy.orm import relationship
 
@@ -361,10 +361,18 @@ class EmploymentEpisode(Base):
     new episode rather than a new Employee/duplicate person record."""
 
     __tablename__ = "employment_episodes"
+    # A rejoiner keeps the SAME employee number across stints, so it can't be
+    # globally unique any more - it only has to be unique among stints that
+    # aren't Separated (a number is never live on two stints at once).
+    __table_args__ = (
+        Index("uq_active_employee_number", "employee_number", unique=True, sqlite_where=text("status != 'SEPARATED'")),
+    )
 
     id = Column(Integer, primary_key=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
-    employee_number = Column(String(50), unique=True, nullable=False)
+    employee_number = Column(String(50), nullable=False)
+    # Set on a rejoin stint: the earlier stint this one follows.
+    previous_episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=True)
 
     # Legacy free-text columns (Phase 1) - superseded by the FK master
     # tables below (Designation/WorkLocation/EmployeeType, admin-managed

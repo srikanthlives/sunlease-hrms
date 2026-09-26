@@ -13,7 +13,12 @@ const ALL_COLUMNS = [
     key: "name", header: "Name", sortable: true, defaultVisible: true, noTruncate: true,
     sticky: true, stickyWidth: 240,
     sortAccessor: (r) => `${r.last_name} ${r.first_name}`,
-    render: (r) => `${r.first_name} ${r.last_name}`,
+    render: (r) => (
+      <>
+        {`${r.first_name} ${r.last_name}`}
+        {r.rejoined && <span className="ml-2 text-[10px] font-medium uppercase tracking-wide text-accent-600">Rejoined</span>}
+      </>
+    ),
   },
   { key: "designation", header: "Designation", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.designation || "—" },
   { key: "cost_center", header: "Cost Center", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.cost_center || "—" },

@@ -149,7 +149,7 @@ def import_attendance_workbook(db: Session, file_bytes: bytes, actor: User) -> d
 
         savepoint = db.begin_nested()
         try:
-            episode = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first()
+            episode = employee_service.find_episode_by_number(db, employee_number)
             if not episode:
                 raise ValueError(f"Employee Number '{employee_number}' not found")
 

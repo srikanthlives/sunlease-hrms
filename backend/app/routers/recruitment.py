@@ -13,7 +13,7 @@ from app.models.models import (
     DesignationCriteria, Project, SelectionCriteria, User,
 )
 from app.schemas.recruitment import (
-    CandidateIn, CandidateStageResultIn, ChangeRequestReviewIn,
+    CandidateIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
 from app.services import audit_service, candidate_bulk_import_service, document_service, licence_service, permission_service, recruitment_service
@@ -195,11 +195,21 @@ def _candidate_detail_dict(db: Session, c: Candidate) -> dict:
         "driving_licence_requirement": licence_service.resolve_driving_licence_requirement_for_candidate(db, c),
         "source": c.source, "remarks": c.remarks,
         "converted_employee_id": c.converted_employee_id, "converted_episode_id": c.converted_episode_id,
+        "rejoin_employee_number": _rejoin_number(db, c),
         "criteria_status": recruitment_service.criteria_status(db, c),
         "all_mandatory_passed": recruitment_service.all_mandatory_passed(db, c),
         "aadhaar_duplicate_warning": recruitment_service.check_aadhaar_duplicates(db, c.aadhaar, exclude_candidate_id=c.id),
         "required_documents": document_service.resolve_required_documents_for_candidate(db, c),
     }
+
+
+def _rejoin_number(db: Session, c: Candidate) -> str | None:
+    """A requalified ex-employee keeps their old employee number on rejoining."""
+    if not c.converted_employee_id or c.status == "CONVERTED":
+        return None
+    from app.models.models import EmploymentEpisode
+    prior = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == c.converted_employee_id).order_by(EmploymentEpisode.id.desc()).first()
+    return prior.employee_number if prior else None
 
 
 def _get_candidate(db: Session, candidate_id: int) -> Candidate:
@@ -223,6 +233,12 @@ def _check_applied_scope(db: Session, user: User, cost_center_id: int | None, pr
         project = db.query(Project).filter(Project.id == project_id).first()
         if project and project.cost_center_id not in allowed:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to this Project's Cost Center")
+
+
+def _check_project_in_cost_center(db: Session, cost_center_id: int, project_id: int) -> None:
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project or project.cost_center_id != cost_center_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Project does not belong to the selected Cost Center")
 
 
 @router.get("/candidates", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
@@ -264,6 +280,7 @@ def bulk_upload_candidates(file: UploadFile = File(...), db: Session = Depends(g
 @router.post("/candidates", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
 def create_candidate(payload: CandidateIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     _check_applied_scope(db, user, payload.applied_cost_center_id, payload.applied_project_id)
+    _check_project_in_cost_center(db, payload.applied_cost_center_id, payload.applied_project_id)
     recruitment_service.validate_unique_identifiers(db, payload.aadhaar, payload.pan, payload.dl_licence_number)
     candidate = Candidate(**payload.model_dump())
     db.add(candidate)
@@ -328,6 +345,35 @@ def requalify_candidate(candidate_id: int, db: Session = Depends(get_db), user: 
     recruitment_service.requalify_candidate(db, candidate, user)
     db.commit()
     return {"ok": True, "status": candidate.status}
+
+
+@router.post("/candidates/{candidate_id}/transfer", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def transfer_candidate(candidate_id: int, payload: CandidateTransferIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Moves a candidate to another Cost Center/Project; reference_number is
+    never regenerated. Needs access to BOTH the current and the destination
+    Cost Center (admins have all). Same approval behaviour as any edit: an
+    APPROVED candidate's move is queued as a change request."""
+    candidate = _get_candidate(db, candidate_id)
+    if candidate.status in ("CONVERTED", "REJECTED"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"A {candidate.status} candidate cannot be transferred")
+    _check_applied_scope(db, user, candidate.applied_cost_center_id, candidate.applied_project_id)
+    _check_applied_scope(db, user, payload.applied_cost_center_id, payload.applied_project_id)
+    _check_project_in_cost_center(db, payload.applied_cost_center_id, payload.applied_project_id)
+    if candidate.applied_cost_center_id == payload.applied_cost_center_id and candidate.applied_project_id == payload.applied_project_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Candidate is already in this Cost Center and Project")
+    old = f"cost_center={candidate.applied_cost_center_id}, project={candidate.applied_project_id}"
+    result = recruitment_service.save_or_request_candidate_update(
+        db, candidate, {"applied_cost_center_id": payload.applied_cost_center_id, "applied_project_id": payload.applied_project_id}, user,
+    )
+    verb = "transfer requested" if result["submitted_for_approval"] else "transferred"
+    audit_service.record(
+        db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user, old_value=old,
+        new_value=f"{verb} to cost_center={payload.applied_cost_center_id}, project={payload.applied_project_id}"
+                  f" (reference {candidate.reference_number} unchanged)" + (f" - {payload.remarks}" if payload.remarks else ""),
+    )
+    db.commit()
+    db.refresh(candidate)
+    return {**_candidate_detail_dict(db, candidate), **result}
 
 
 @router.post("/candidates/{candidate_id}/submit", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

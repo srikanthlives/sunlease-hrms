@@ -29,7 +29,16 @@ def current_cost_center_id(db: Session, episode_id: int) -> int | None:
         .order_by(OrgAssignment.effective_from.desc())
         .first()
     )
-    return row.cost_center_id if row else None
+    if row:
+        return row.cost_center_id
+    # A Separated stint's assignments are closed at exit; keep scoping it to
+    # the Cost Center it last belonged to instead of treating it as unassigned
+    # (which would make it visible to every scoped user).
+    last = (
+        db.query(OrgAssignment).filter(OrgAssignment.episode_id == episode_id)
+        .order_by(OrgAssignment.effective_from.desc(), OrgAssignment.id.desc()).first()
+    )
+    return last.cost_center_id if last else None
 
 
 def find_approval_rule(db: Session, transaction_type: str, cost_center_id: int | None, employee_category_id: int | None) -> ApprovalRule | None:

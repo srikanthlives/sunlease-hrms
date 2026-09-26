@@ -33,6 +33,12 @@ class DesignationCriteriaUpdateIn(BaseModel):
     is_active: bool = True
 
 
+class CandidateTransferIn(BaseModel):
+    applied_cost_center_id: int
+    applied_project_id: int
+    remarks: str | None = None
+
+
 class CandidateIn(BaseModel):
     first_name: str
     middle_name: str | None = None

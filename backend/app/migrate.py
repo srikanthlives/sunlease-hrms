@@ -120,6 +120,60 @@ def _drop_orphaned_table(target_engine: Engine, inspector, table_name: str, verb
     return True
 
 
+def _relax_employee_number_unique(target_engine: Engine, inspector, verbose: bool) -> bool:
+    """One-off fixup: employment_episodes.employee_number used to be
+    globally UNIQUE. A rejoiner now keeps the same number on a new stint,
+    so it's only unique among non-Separated stints (partial unique index
+    uq_active_employee_number). SQLite can't drop a column constraint in
+    place, so this rebuilds the table from models.py's definition (via
+    CreateTable, so it can't drift) copying every existing row/column
+    unchanged. Idempotent: only runs while the old unique constraint is
+    still there."""
+    if "employment_episodes" not in inspector.get_table_names():
+        return False
+    has_old_unique = any(
+        c.get("column_names") == ["employee_number"] for c in inspector.get_unique_constraints("employment_episodes")
+    ) or any(
+        i.get("unique") and i.get("column_names") == ["employee_number"] and i.get("dialect_options", {}).get("sqlite_where") is None
+        for i in inspector.get_indexes("employment_episodes")
+    )
+    if not has_old_unique:
+        return False
+
+    table = Base.metadata.tables["employment_episodes"]
+    live = {c["name"] for c in inspector.get_columns("employment_episodes")}
+    copy_cols = ", ".join(f'"{c.name}"' for c in table.columns if c.name in live)
+    create_sql = str(CreateTable(table).compile(target_engine)).replace("CREATE TABLE employment_episodes ", "CREATE TABLE employment_episodes_new ", 1)
+
+    with target_engine.begin() as conn:
+        conn.execute(text(create_sql))
+        conn.execute(text(f'INSERT INTO "employment_episodes_new" ({copy_cols}) SELECT {copy_cols} FROM "employment_episodes"'))
+        conn.execute(text('DROP TABLE "employment_episodes"'))
+        conn.execute(text('ALTER TABLE "employment_episodes_new" RENAME TO "employment_episodes"'))
+        conn.execute(text(
+            'CREATE UNIQUE INDEX IF NOT EXISTS uq_active_employee_number ON employment_episodes (employee_number) WHERE status != \'SEPARATED\''
+        ))
+    if verbose:
+        print("Rebuilt employment_episodes so a rejoiner can reuse an employee number (no data lost).")
+    return True
+
+
+def _close_open_assignments_of_separated(target_engine: Engine, verbose: bool) -> None:
+    """Idempotent data fixup: a Separated stint's Cost Center/Department
+    assignments and cost allocations used to be left open forever, which
+    kept the person appearing in that Cost Center's monthly lists after
+    their exit. End them on the exit date."""
+    with target_engine.begin() as conn:
+        for tbl in ("org_assignments", "cost_allocations"):
+            result = conn.execute(text(
+                f"UPDATE {tbl} SET effective_to = max(effective_from, COALESCE("
+                f"(SELECT separation_date FROM employment_episodes e WHERE e.id = {tbl}.episode_id), date('now'))) "
+                f"WHERE effective_to IS NULL AND episode_id IN (SELECT id FROM employment_episodes WHERE status = 'SEPARATED')"
+            ))
+            if verbose and result.rowcount:
+                print(f"Closed {result.rowcount} open {tbl} row(s) of Separated employees at their exit date.")
+
+
 def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
     target_engine = target_engine or engine
     summary = {"tables_created": [], "columns_added": []}
@@ -128,6 +182,8 @@ def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
     _drop_departments_cost_center_id(target_engine, inspector, verbose)
     inspector = inspect(target_engine)
     _tighten_candidates_employee_category_not_null(target_engine, inspector, verbose)
+    inspector = inspect(target_engine)
+    _relax_employee_number_unique(target_engine, inspector, verbose)
     inspector = inspect(target_engine)
     # CandidateSalaryComponent (Proposed Salary on the Candidate page) was
     # removed entirely - see recruitment_service.py/routers/recruitment.py
@@ -154,6 +210,8 @@ def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
                     continue
                 conn.execute(text(_add_column_ddl(table.name, column)))
                 summary["columns_added"].append((table.name, column.name))
+
+    _close_open_assignments_of_separated(target_engine, verbose)
 
     if verbose:
         if not summary["tables_created"] and not summary["columns_added"]:
