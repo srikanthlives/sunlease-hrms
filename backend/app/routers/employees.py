@@ -15,16 +15,16 @@ from app.models.enums import AddressType, AuditAction, EpisodeStatus, Permission
 from app.models.models import (
     Employee, Address, EmploymentEpisode, StatutoryInfo, BankAccount, Dependent, Nominee,
     SeparationRecord, ChangeRequest, AuditLog, User, OrgAssignment, CostAllocation, CostCenter, Department,
-    DocumentMeta, DrivingLicenceDetail,
+    DocumentMeta, DrivingLicenceDetail, EmployeeTransfer,
 )
 from app.schemas.employees import (
     PersonalInfoStep, AddressStep, EmploymentInfoStep, OrgAssignmentStep, CostAllocationIn,
     StatutoryInfoStep, BankAccountStep, DependentIn, NomineeIn, SeparationIn, SeparationChecklistUpdate,
-    ChangeRequestReview, DrivingLicenceStep, RejoinIn,
+    ChangeRequestReview, DrivingLicenceStep, RejoinIn, TransferIn,
 )
 from app.services import (
     audit_service, employee_service, approval_service, permission_service,
-    document_service, licence_service, bulk_import_service,
+    document_service, licence_service, bulk_import_service, transfer_service, payroll_service,
 )
 
 router = APIRouter(prefix="/api/v1/employees", tags=["employees"], dependencies=[Depends(get_current_user)])
@@ -120,25 +120,7 @@ def delete_draft(episode_id: int, db: Session = Depends(get_db), user: User = De
 
     audit_service.record(db, "EMPLOYEE_DRAFT", episode.id, AuditAction.UPDATE, user, old_value=f"deleted employee_number={episode.employee_number}")
 
-    for document in db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).all():
-        try:
-            path = document_service.resolve_file_path(document)
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-    db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).delete(synchronize_session=False)
-
-    for model in (OrgAssignment, CostAllocation, StatutoryInfo, BankAccount, Dependent, Nominee, DrivingLicenceDetail):
-        db.query(model).filter(model.episode_id == episode.id).delete(synchronize_session=False)
-
-    employee_id = episode.employee_id
-    db.query(EmploymentEpisode).filter(EmploymentEpisode.id == episode.id).delete(synchronize_session=False)
-
-    remaining = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == employee_id).count()
-    if remaining == 0:
-        db.query(Address).filter(Address.employee_id == employee_id).delete(synchronize_session=False)
-        db.query(Employee).filter(Employee.id == employee_id).delete(synchronize_session=False)
+    employee_service.purge_draft_episode(db, episode)
 
     db.commit()
     return {"ok": True}
@@ -234,6 +216,8 @@ def list_employees(
     cost_centers = {c.id: c.name for c in db.query(CostCenter.id, CostCenter.name).all()}
     departments = {d.id: d.name for d in db.query(Department.id, Department.name).all()}
 
+    transferred_in_ids = {t.to_episode_id for t in db.query(EmployeeTransfer).filter(EmployeeTransfer.status != "CANCELLED").all() if t.to_episode_id}
+
     rows = []
     for e in episodes:
         assignment = assignment_by_episode.get(e.id)
@@ -263,6 +247,7 @@ def list_employees(
             "date_of_joining": e.date_of_joining,
             "separation_date": e.separation_date,
             "rejoined": e.previous_episode_id is not None,
+            "origin": ("TRANSFER" if e.id in transferred_in_ids else "REJOIN") if e.previous_episode_id is not None else None,
             "work_location": e.work_location.name if e.work_location else None,
             "cost_center": cost_centers.get(cc_id),
             "department": departments.get(assignment.department_id) if assignment else None,
@@ -372,6 +357,9 @@ def build_employee_detail(db: Session, user: User, episode: EmploymentEpisode) -
         ],
         "separation": _separation_dict(episode),
         "rejoined": episode.previous_episode_id is not None,
+        "previous_episode_id": episode.previous_episode_id,
+        "service_start_date": episode.service_start_date,
+        "transfer": _transfer_dict(db, episode),
         "previous_employment": _previous_employment(db, user, episode),
     }
     return permission_service.mask_sensitive_fields(db, user, detail)
@@ -424,14 +412,10 @@ def save_employment_info(episode_id: int, payload: EmploymentInfoStep, db: Sessi
     _check_scope(db, user, episode)
 
     if payload.employee_number != episode.employee_number:
-        existing = db.query(EmploymentEpisode).filter(
-            EmploymentEpisode.employee_number == payload.employee_number,
-            EmploymentEpisode.id != episode.id,
-        ).first()
-        # Only the same person's own earlier (Separated) stint may share a
-        # number; anyone else's episode - live or separated - is a clash.
-        if existing and not (existing.employee_id == episode.employee_id and existing.status == EpisodeStatus.SEPARATED):
-            raise HTTPException(status.HTTP_409_CONFLICT, "Employee Number already in use")
+        employee_service.check_number_available(
+            db, payload.employee_number, episode.employee_id, employee_service.home_cost_center_id(db, episode.id),
+            exclude_episode_id=episode.id,
+        )
 
     return _save_or_request(db, episode, TransactionType.EMPLOYMENT_CHANGE, payload.model_dump(), user)
 
@@ -440,6 +424,7 @@ def save_employment_info(episode_id: int, payload: EmploymentInfoStep, db: Sessi
 def save_org_assignment(episode_id: int, payload: OrgAssignmentStep, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _get_episode(db, episode_id)
     _check_scope(db, user, episode)
+    employee_service.guard_cost_center_change(db, episode, payload.cost_center_id)
     employee_service.add_org_assignment(db, episode.id, payload.model_dump())
     audit_service.record(db, "ORG_ASSIGNMENT", episode.id, AuditAction.CREATE, user)
     db.commit()
@@ -450,6 +435,7 @@ def save_org_assignment(episode_id: int, payload: OrgAssignmentStep, db: Session
 def save_cost_allocation(episode_id: int, payload: CostAllocationIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _get_episode(db, episode_id)
     _check_scope(db, user, episode)
+    employee_service.guard_allocation_cost_center(db, episode, payload.cost_center_id)
 
     current_total = employee_service.active_allocation_total(db, episode.id)
     if current_total + payload.percentage > 100.01:  # small epsilon for float rounding
@@ -709,12 +695,15 @@ def submit_for_approval(episode_id: int, db: Session = Depends(get_db), user: Us
 def approve_employee(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _get_episode(db, episode_id)
     approval_service.authorize_approval(db, user, episode, TransactionType.EMPLOYEE_CREATION)
+    transfer_service.gate_entry_approval(db, episode)
     result = _transition(db, episode, EpisodeStatus.PENDING_APPROVAL, EpisodeStatus.ACTIVE, user)
+    transfer_service.complete_on_entry_approval(db, episode, user)
     login = employee_service.provision_self_service_login(db, episode)
     if login:
         audit_service.record(db, "USER", episode.employee_id, AuditAction.CREATE, user, new_value=f"self-service login {login['username']}")
         db.commit()
         result["self_service_login"] = login
+    db.commit()
     return result
 
 
@@ -737,6 +726,24 @@ def reject_employee(episode_id: int, db: Session = Depends(get_db), user: User =
     return _transition(db, episode, EpisodeStatus.PENDING_APPROVAL, EpisodeStatus.DRAFT, user)
 
 
+def _transfer_dict(db: Session, episode: EmploymentEpisode) -> dict | None:
+    t = transfer_service.open_transfer_for(db, episode.id)
+    if not t:
+        return None
+    outgoing = t.from_episode_id == episode.id
+    other_id = t.to_episode_id if outgoing else t.from_episode_id
+    other = db.query(EmploymentEpisode).filter(EmploymentEpisode.id == other_id).first() if other_id else None
+    old = episode if outgoing else other
+    return {
+        "id": t.id, "direction": "OUT" if outgoing else "IN", "transfer_type": t.transfer_type, "status": t.status,
+        "from_cost_center": t.from_cost_center.name if t.from_cost_center else None,
+        "to_cost_center": t.to_cost_center.name if t.to_cost_center else None,
+        "transfer_date": t.transfer_date, "other_episode_id": other_id, "other_employee_number": other.employee_number if other else None,
+        "other_status": other.status if other else None,
+        "can_cancel": bool(old and old.status == EpisodeStatus.NOTICE_PERIOD),
+    }
+
+
 def _previous_employment(db: Session, user: User, episode: EmploymentEpisode) -> list[dict]:
     """Every OTHER stint of this same person (earlier and later), oldest
     first. A stint in a Cost Center the viewer isn't scoped to is listed
@@ -749,6 +756,12 @@ def _previous_employment(db: Session, user: User, episode: EmploymentEpisode) ->
         .order_by(EmploymentEpisode.date_of_joining, EmploymentEpisode.id).all()
     )
     cost_centers = {c.id: c.name for c in db.query(CostCenter.id, CostCenter.name).all()}
+    # "Transferred in/out" labels: how each other stint is tied to a transfer.
+    transfers_by_episode = {}
+    for t in db.query(EmployeeTransfer).filter(EmployeeTransfer.employee_id == episode.employee_id, EmployeeTransfer.status != "CANCELLED").all():
+        transfers_by_episode[t.from_episode_id] = f"{t.transfer_type}_OUT"
+        if t.to_episode_id:
+            transfers_by_episode[t.to_episode_id] = f"{t.transfer_type}_IN"
     out = []
     for e in others:
         cc_id = employee_service.last_cost_center_id(db, e.id)
@@ -761,6 +774,7 @@ def _previous_employment(db: Session, user: User, episode: EmploymentEpisode) ->
             "employee_category": e.employee_category.name if e.employee_category else None,
             "cost_center": cost_centers.get(cc_id),
             "can_open": permission_service.can_see_cost_center(db, user, cc_id),
+            "transfer_type": transfers_by_episode.get(e.id),
         })
     return out
 
@@ -827,10 +841,17 @@ def update_separation_checklist(episode_id: int, payload: SeparationChecklistUpd
     return {"ok": True}
 
 
-@router.post("/{episode_id}/separation/complete", dependencies=[Depends(require_permission(Permission.EMPLOYEE_SEPARATE))])
+@router.post("/{episode_id}/separation/complete")
 def complete_separation(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _get_episode(db, episode_id)
     _check_scope(db, user, episode)
+    transfer = db.query(EmployeeTransfer).filter(EmployeeTransfer.from_episode_id == episode.id, EmployeeTransfer.status == "INITIATED").first()
+    if transfer:
+        # An exit that is part of a Cost Center transfer is approved by the
+        # exit-side approver (routed like any other approval rule).
+        approval_service.authorize_approval(db, user, episode, TransactionType.SEPARATION)
+    elif not permission_service.has_permission(db, user, Permission.EMPLOYEE_SEPARATE):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Missing permission: employee.separate")
     if episode.status != EpisodeStatus.NOTICE_PERIOD:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only an employee in Notice Period can be marked Separated")
     old_status = episode.status
@@ -839,25 +860,81 @@ def complete_separation(episode_id: int, db: Session = Depends(get_db), user: Us
     employee_service.close_assignments_at_exit(db, episode)
     employee_service.disable_self_service_login(db, episode.employee_id)
     audit_service.record(db, "EMPLOYMENT_EPISODE", episode.id, AuditAction.STATUS_CHANGE, user, old_value=old_status, new_value=episode.status)
+    if transfer and transfer.transfer_type == "RESIGNATION":
+        # A resignation-type transfer is a real exit with no continuity, so
+        # Full & Final (leave encashment + gratuity) is calculated right here
+        # instead of waiting for someone to run it. An INTERNAL transfer
+        # deliberately skips this - those entitlements carry over.
+        try:
+            payroll_service.process_full_final_settlement(db, episode.id, user)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     db.commit()
     return {"ok": True, "status": episode.status}
 
 
+def _check_both_cost_centers(db: Session, user: User, source_episode: EmploymentEpisode, destination_cost_center_id: int) -> None:
+    """A transfer/rejoin-elsewhere needs access to BOTH Cost Centers."""
+    _check_scope(db, user, source_episode)
+    if not permission_service.can_see_cost_center(db, user, destination_cost_center_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to the destination Cost Center")
+
+
+@router.get("/{episode_id}/number-for")
+def number_for_cost_center(episode_id: int, cost_center_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Tells the Transfer/Rejoin dialog whether the person has served the
+    chosen Cost Center before (their old number comes back) or needs a new one."""
+    episode = _get_episode(db, episode_id)
+    _check_scope(db, user, episode)
+    found = employee_service.number_for_cost_center(db, episode.employee_id, cost_center_id)
+    return {"employee_number": found[0] if found else None, "reused": bool(found)}
+
+
 @router.post("/{episode_id}/rejoin", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
 def rejoin_employee(episode_id: int, payload: RejoinIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """Starts a new stint for a fully Separated employee - same person, same
-    employee number, new joining date, as a DRAFT that goes through the
-    normal wizard and approval. The old stint stays as history. Needs access
-    to the Cost Center the person last belonged to."""
+    """Re-hires a fully Separated person into a Cost Center as a new stint
+    (same person). Same Cost Center as before or one they've served before
+    reuses their number there; a new Cost Center needs a new number. The old
+    stint stays as history; this is separate service (no continuity)."""
     prior = _get_episode(db, episode_id)
-    _check_scope(db, user, prior)
-    new = employee_service.create_rejoin_episode(db, prior, payload.date_of_joining, user)
+    _check_both_cost_centers(db, user, prior, payload.cost_center_id)
+    new = employee_service.create_rejoin_episode(
+        db, prior, payload.date_of_joining, payload.cost_center_id, payload.project_id, payload.department_id, payload.employee_number, user,
+    )
     audit_service.record(
         db, "EMPLOYMENT_EPISODE", new.id, AuditAction.CREATE, user,
-        new_value=f"rejoin of episode {prior.id} ({prior.employee_number}) from {payload.date_of_joining}",
+        new_value=f"rejoin of episode {prior.id} ({prior.employee_number}) into cost center {payload.cost_center_id} as {new.employee_number} from {payload.date_of_joining}",
     )
     db.commit()
     return {"employee_id": new.employee_id, "episode_id": new.id}
+
+
+@router.post("/{episode_id}/transfer", dependencies=[Depends(require_permission(Permission.EMPLOYEE_SEPARATE))])
+def transfer_employee(episode_id: int, payload: TransferIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Starts a Cost Center transfer: exit formalities begin on this record,
+    a draft record is opened in the destination Cost Center. Needs access to
+    both Cost Centers."""
+    episode = _get_episode(db, episode_id)
+    _check_both_cost_centers(db, user, episode, payload.cost_center_id)
+    transfer = transfer_service.initiate_transfer(
+        db, episode, transfer_type=payload.transfer_type, cost_center_id=payload.cost_center_id, project_id=payload.project_id,
+        department_id=payload.department_id, transfer_date=payload.transfer_date, employee_number=payload.employee_number,
+        remarks=payload.remarks, user=user,
+    )
+    db.commit()
+    return {"transfer_id": transfer.id, "new_episode_id": transfer.to_episode_id}
+
+
+@router.post("/{episode_id}/transfer/cancel", dependencies=[Depends(require_permission(Permission.EMPLOYEE_SEPARATE))])
+def cancel_transfer(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    episode = _get_episode(db, episode_id)
+    _check_scope(db, user, episode)
+    transfer = transfer_service.open_transfer_for(db, episode.id)
+    if not transfer:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No transfer in progress for this record")
+    transfer_service.cancel_transfer(db, transfer, user)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/{episode_id}/separation/cancel", dependencies=[Depends(require_permission(Permission.EMPLOYEE_SEPARATE))])

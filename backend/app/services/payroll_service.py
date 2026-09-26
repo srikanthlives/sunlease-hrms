@@ -933,8 +933,9 @@ def process_full_final_settlement(db: Session, episode_id: int, user: User) -> F
     # flag. gratuity_years_of_service uses date_of_joining -> as_of, as a
     # float (days/365.25) - approximate, not a court-precise day count.
     gratuity_years_of_service = 0.0
-    if episode.date_of_joining:
-        gratuity_years_of_service = round((as_of - episode.date_of_joining).days / 365.25, 2)
+    service_start = episode.service_start_date or episode.date_of_joining
+    if service_start:
+        gratuity_years_of_service = round((as_of - service_start).days / 365.25, 2)
 
     statutory_info = (
         db.query(StatutoryInfo)

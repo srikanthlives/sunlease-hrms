@@ -374,6 +374,8 @@ def _update_existing_row(db: Session, episode: EmploymentEpisode, data: dict, ac
     department = _lookup(db, Department, _cell_str(data.get("department")))
     if cost_center and department:
         current = db.query(OrgAssignment).filter(OrgAssignment.episode_id == episode.id, OrgAssignment.effective_to.is_(None)).first()
+        if current and current.cost_center_id != cost_center.id:
+            employee_service.guard_cost_center_change(db, episode, cost_center.id)
         if not current or current.cost_center_id != cost_center.id or current.department_id != department.id:
             project = _lookup(db, Project, _cell_str(data.get("project")))
             employee_service.add_org_assignment(db, episode.id, {

@@ -577,13 +577,18 @@ export default function EmployeeWizard() {
             <div>
               <h3 className="text-sm font-semibold text-ink mb-3">Organizational Assignment</h3>
               <div className="grid grid-cols-2 gap-4">
-                <Select label="Cost Center" value={assignment.cost_center_id || ""} onChange={(e) => setAssignment({ ...assignment, cost_center_id: e.target.value })}>
+                <Select
+                  label="Cost Center"
+                  value={assignment.cost_center_id || ""}
+                  disabled={!!employment.previous_episode_id || (!!employment.status && !["DRAFT", "PENDING_APPROVAL"].includes(employment.status))}
+                  onChange={(e) => setAssignment({ ...assignment, cost_center_id: e.target.value, project_id: "" })}
+                >
                   <option value="">Select...</option>
                   {masters.costCenters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
                 <Select label="Project (optional)" value={assignment.project_id || ""} onChange={(e) => setAssignment({ ...assignment, project_id: e.target.value })}>
                   <option value="">None</option>
-                  {masters.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {masters.projects.filter((p) => !assignment.cost_center_id || String(p.cost_center_id) === String(assignment.cost_center_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </Select>
                 <Select label="Department" value={assignment.department_id || ""} onChange={(e) => setAssignment({ ...assignment, department_id: e.target.value })}>
                   <option value="">Select...</option>
@@ -631,13 +636,13 @@ export default function EmployeeWizard() {
               {allocationError && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2 mb-3">{allocationError}</div>}
 
               <div className="grid grid-cols-4 gap-4 items-end">
-                <Select label="Cost Center" value={allocation.cost_center_id} onChange={(e) => setAllocation({ ...allocation, cost_center_id: e.target.value })}>
+                <Select label="Cost Center" value={allocation.cost_center_id} onChange={(e) => setAllocation({ ...allocation, cost_center_id: e.target.value, project_id: "" })}>
                   <option value="">Select...</option>
-                  {masters.costCenters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {masters.costCenters.filter((c) => !assignment.cost_center_id || String(c.id) === String(assignment.cost_center_id)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
                 <Select label="Project (optional)" value={allocation.project_id} onChange={(e) => setAllocation({ ...allocation, project_id: e.target.value })}>
                   <option value="">None</option>
-                  {masters.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {masters.projects.filter((p) => !allocation.cost_center_id || String(p.cost_center_id) === String(allocation.cost_center_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </Select>
                 <Input label="Percentage" type="number" min="0" max="100" value={allocation.percentage} onChange={(e) => setAllocation({ ...allocation, percentage: e.target.value })} />
                 <Input label="Effective From" type="date" value={allocation.effective_from} onChange={(e) => setAllocation({ ...allocation, effective_from: e.target.value })} />

@@ -33,9 +33,12 @@ export default function EmployeeProfile() {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [loginPin, setLoginPin] = useState(null);
   const [loginBusy, setLoginBusy] = useState(false);
-  const [rejoinOpen, setRejoinOpen] = useState(false);
-  const [rejoinDate, setRejoinDate] = useState("");
-  const [rejoinBusy, setRejoinBusy] = useState(false);
+  // One dialog for both "Rejoin" (after a real exit) and "Transfer" (to another Cost Center).
+  const [moveMode, setMoveMode] = useState(null); // null | "REJOIN" | "TRANSFER"
+  const [moveForm, setMoveForm] = useState({ transfer_type: "INTERNAL", cost_center_id: "", project_id: "", department_id: "", date: "", employee_number: "", remarks: "" });
+  const [moveMasters, setMoveMasters] = useState({ costCenters: [], projects: [], departments: [] });
+  const [numberInfo, setNumberInfo] = useState(null);
+  const [moveBusy, setMoveBusy] = useState(false);
 
   function reload() {
     client.get(`/employees/${episodeId}`).then((res) => {
@@ -111,17 +114,58 @@ export default function EmployeeProfile() {
     URL.revokeObjectURL(url);
   }
 
-  async function startRejoin() {
-    setRejoinBusy(true);
+  function openMove(mode) {
+    setMoveMode(mode);
+    setNumberInfo(null);
+    setMoveForm({ transfer_type: "INTERNAL", cost_center_id: "", project_id: "", department_id: "", date: "", employee_number: "", remarks: "" });
+    Promise.all([client.get("/cost-centers"), client.get("/projects"), client.get("/departments")])
+      .then(([cc, pr, dp]) => setMoveMasters({ costCenters: cc.data, projects: pr.data, departments: dp.data }));
+  }
+
+  async function pickMoveCostCenter(costCenterId) {
+    setMoveForm((f) => ({ ...f, cost_center_id: costCenterId, project_id: "", employee_number: "" }));
+    setNumberInfo(null);
+    if (costCenterId) {
+      const res = await client.get(`/employees/${episodeId}/number-for`, { params: { cost_center_id: costCenterId } });
+      setNumberInfo(res.data);
+    }
+  }
+
+  async function submitMove() {
+    setMoveBusy(true);
     setError("");
+    const common = {
+      cost_center_id: Number(moveForm.cost_center_id), project_id: Number(moveForm.project_id),
+      department_id: Number(moveForm.department_id), employee_number: numberInfo?.reused ? null : (moveForm.employee_number || null),
+    };
     try {
-      const res = await client.post(`/employees/${episodeId}/rejoin`, { date_of_joining: rejoinDate });
-      setRejoinOpen(false);
-      navigate(`/employees/${res.data.episode_id}/wizard`);
+      if (moveMode === "REJOIN") {
+        const res = await client.post(`/employees/${episodeId}/rejoin`, { ...common, date_of_joining: moveForm.date });
+        setMoveMode(null);
+        navigate(`/employees/${res.data.episode_id}/wizard`);
+      } else {
+        await client.post(`/employees/${episodeId}/transfer`, {
+          ...common, transfer_type: moveForm.transfer_type, transfer_date: moveForm.date, remarks: moveForm.remarks || null,
+        });
+        setMoveMode(null);
+        setTab("Separation");
+        reload();
+      }
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
-      setRejoinBusy(false);
+      setMoveBusy(false);
+    }
+  }
+
+  async function cancelTransfer() {
+    if (!window.confirm("Cancel this transfer? The employee stays Active in the current Cost Center and the new draft record is removed.")) return;
+    setError("");
+    try {
+      await client.post(`/employees/${episodeId}/transfer/cancel`);
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
     }
   }
 
@@ -219,7 +263,11 @@ export default function EmployeeProfile() {
             <h1 className="text-xl font-display font-semibold text-ink">{employee.first_name} {employee.last_name}</h1>
             <p className="text-sm text-ink/50 mt-1">
               {episode.employee_number} · {episode.designation || "—"} · <StatusBadge status={episode.status} />
-              {detail.rejoined && <span className="ml-2 text-[11px] font-medium uppercase tracking-wide text-accent-600">Rejoined</span>}
+              {detail.rejoined && (
+                <span className="ml-2 text-[11px] font-medium uppercase tracking-wide text-accent-600">
+                  {detail.previous_employment?.find((p) => p.episode_id === detail.previous_episode_id)?.transfer_type?.endsWith("_OUT") ? "Transferred in" : "Rejoined"}
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -236,8 +284,11 @@ export default function EmployeeProfile() {
           {episode.status !== "DRAFT" && episode.status !== "SEPARATED" && (user?.role === "HR_ADMIN" || can("employee.edit")) && (
             <Button variant="outline" onClick={() => navigate(`/employees/${episodeId}/wizard`)}>Edit</Button>
           )}
-          {episode.status === "SEPARATED" && can("employee.create") && (
-            <Button variant="accent" onClick={() => { setRejoinDate(""); setRejoinOpen(true); }}>Rejoin</Button>
+          {episode.status === "SEPARATED" && can("employee.create") && !detail.transfer && (
+            <Button variant="accent" onClick={() => openMove("REJOIN")}>Rejoin</Button>
+          )}
+          {episode.status === "ACTIVE" && can("employee.separate") && (
+            <Button variant="outline" onClick={() => openMove("TRANSFER")}>Transfer</Button>
           )}
           {episode.status !== "DRAFT" && (user?.role === "HR_ADMIN" || user?.role === "SUPER_ADMIN") && (
             <Button variant="outline" onClick={resetLogin} disabled={loginBusy}>
@@ -246,22 +297,90 @@ export default function EmployeeProfile() {
           )}
         </div>
       </div>
-      {rejoinOpen && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setRejoinOpen(false)}>
-          <div className="bg-white rounded-lg p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-ink mb-2">Rejoin {employee.first_name} {employee.last_name}</h3>
-            <p className="text-xs text-ink/50 mb-3">
-              Starts a new employment record for the same person, keeping employee number <strong>{episode.employee_number}</strong>.
-              This record (exit {formatDate(episode.separation_date)}) stays as history. The two periods are separate service —
-              nothing carries over. Bank, PF/ESI numbers, dependents, nominees and driving licence are copied as editable
-              starting points; salary, attendance, leave and Cost Center assignment start fresh.
-            </p>
-            <Input type="date" label="New Joining Date*" value={rejoinDate} onChange={(e) => setRejoinDate(e.target.value)} />
-            <div className="flex justify-end gap-2 mt-4">
-              <Button variant="outline" onClick={() => setRejoinOpen(false)} disabled={rejoinBusy}>Cancel</Button>
-              <Button onClick={startRejoin} disabled={!rejoinDate || rejoinBusy}>{rejoinBusy ? "Creating…" : "Start Rejoin"}</Button>
+      {moveMode && (() => {
+        const currentCc = detail.assignments?.find((x) => !x.effective_to)?.cost_center_id;
+        const ccOptions = moveMasters.costCenters.filter((c) => moveMode === "REJOIN" || c.id !== currentCc);
+        const projects = moveMasters.projects.filter((p) => String(p.cost_center_id) === String(moveForm.cost_center_id));
+        const numberOk = !moveForm.cost_center_id || numberInfo?.reused || !!moveForm.employee_number;
+        const ready = moveForm.cost_center_id && moveForm.project_id && moveForm.department_id && moveForm.date && numberOk;
+        const set = (k) => (e) => setMoveForm({ ...moveForm, [k]: e.target.value });
+        return (
+          <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setMoveMode(null)}>
+            <div className="bg-white rounded-lg p-6 w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-sm font-semibold text-ink mb-2">
+                {moveMode === "REJOIN" ? "Rejoin" : "Transfer"} {employee.first_name} {employee.last_name}
+              </h3>
+              {moveMode === "REJOIN" ? (
+                <p className="text-xs text-ink/50 mb-3">
+                  Starts a new employment record for the same person (previous exit {formatDate(episode.separation_date)}). This is
+                  separate service — nothing carries over. Bank, PF/ESI numbers, dependents, nominees and driving licence are copied as
+                  editable starting points; salary, attendance and leave start fresh.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-ink/50 mb-3">
+                    A Cost Center change is a transfer: exit formalities here (approved by the approver), entry formalities in the new Cost
+                    Center (approved by the destination approver). This record and its attendance/salary history stay in this Cost Center.
+                  </p>
+                  <Select label="Transfer type" value={moveForm.transfer_type} onChange={set("transfer_type")}>
+                    <option value="INTERNAL">Internal transfer — service continues, leave/gratuity retained, no final settlement</option>
+                    <option value="RESIGNATION">Resignation and joining elsewhere — separate service, final settlement (leave encashment, gratuity) calculated automatically on exit approval</option>
+                  </Select>
+                </>
+              )}
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <Select label="Cost Center*" value={moveForm.cost_center_id} onChange={(e) => pickMoveCostCenter(e.target.value)}>
+                  <option value="">Select...</option>
+                  {ccOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </Select>
+                <Select label="Project*" value={moveForm.project_id} onChange={set("project_id")}>
+                  <option value="">Select...</option>
+                  {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </Select>
+                <Select label="Department*" value={moveForm.department_id} onChange={set("department_id")}>
+                  <option value="">Select...</option>
+                  {moveMasters.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </Select>
+                <Input type="date" label={moveMode === "REJOIN" ? "New Joining Date*" : "Joining Date in new Cost Center*"} value={moveForm.date} onChange={set("date")} />
+              </div>
+              {numberInfo?.reused && (
+                <p className="text-xs text-ink/60 mt-3">Previously employed in this Cost Center as <strong>{numberInfo.employee_number}</strong> — that number will be reused.</p>
+              )}
+              {numberInfo && !numberInfo.reused && (
+                <div className="mt-3">
+                  <Input label="New Employee Number* (first time in this Cost Center)" value={moveForm.employee_number} onChange={set("employee_number")} />
+                </div>
+              )}
+              {moveMode === "TRANSFER" && (
+                <div className="mt-3"><Input label="Remarks" value={moveForm.remarks} onChange={set("remarks")} /></div>
+              )}
+              <div className="flex justify-end gap-2 mt-4">
+                <Button variant="outline" onClick={() => setMoveMode(null)} disabled={moveBusy}>Cancel</Button>
+                <Button onClick={submitMove} disabled={!ready || moveBusy}>
+                  {moveBusy ? "Working…" : moveMode === "REJOIN" ? "Start Rejoin" : "Start Transfer"}
+                </Button>
+              </div>
             </div>
           </div>
+        );
+      })()}
+      {detail.transfer && (
+        <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>
+            <strong>Cost Center transfer in progress</strong> ({detail.transfer.transfer_type === "INTERNAL" ? "internal, service continues" : "resignation and rejoin"}):{" "}
+            {detail.transfer.from_cost_center} → {detail.transfer.to_cost_center}, joining {formatDate(detail.transfer.transfer_date)}.{" "}
+            {detail.transfer.direction === "OUT"
+              ? "Complete the exit formalities (Separation tab); an approver then approves the exit, after which the new record can be approved."
+              : `This is the new record — it can be approved once the exit from ${detail.transfer.from_cost_center} is completed.`}
+          </span>
+          {detail.transfer.other_episode_id && (
+            <button className="underline" onClick={() => navigate(`/employees/${detail.transfer.other_episode_id}`)}>
+              Open {detail.transfer.direction === "OUT" ? "new" : "previous"} record{detail.transfer.other_employee_number ? ` (${detail.transfer.other_employee_number})` : ""}
+            </button>
+          )}
+          {detail.transfer.can_cancel && can("employee.separate") && (
+            <button className="underline text-danger" onClick={cancelTransfer}>Cancel transfer</button>
+          )}
         </div>
       )}
       {loginPin && (
@@ -299,7 +418,7 @@ export default function EmployeeProfile() {
           <>
             {detail.previous_employment?.length > 0 && (
               <div className="mb-5 border border-ink/10 rounded-md p-3 bg-ink/[0.02]">
-                <div className="text-xs font-semibold uppercase tracking-wide text-ink/40 mb-2">Employment History (same person, separate periods of service)</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-ink/40 mb-2">Employment History (same person)</div>
                 <div className="space-y-1">
                   {detail.previous_employment.map((p) => (
                     <div key={p.episode_id} className="flex flex-wrap items-center gap-x-3 text-sm text-ink/70">
@@ -307,6 +426,11 @@ export default function EmployeeProfile() {
                       <span>{formatDate(p.date_of_joining)} → {p.separation_date ? formatDate(p.separation_date) : "present"}</span>
                       <span>{p.cost_center || "—"}{p.designation ? ` · ${p.designation}` : ""}</span>
                       <StatusBadge status={p.status} />
+                      {p.transfer_type && (
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-accent-600">
+                          {{ INTERNAL_OUT: "Internal transfer out", INTERNAL_IN: "Internal transfer in", RESIGNATION_OUT: "Resigned & rejoined elsewhere", RESIGNATION_IN: "Rejoined from another Cost Center" }[p.transfer_type]}
+                        </span>
+                      )}
                       {p.separation_type && <span className="text-xs text-ink/40">{p.separation_type.replace(/_/g, " ")}{p.separation_reason ? ` — ${p.separation_reason}` : ""}</span>}
                       {p.can_open
                         ? <button className="text-xs underline text-brand-700" onClick={() => navigate(`/employees/${p.episode_id}`)}>Open</button>
@@ -314,7 +438,7 @@ export default function EmployeeProfile() {
                     </div>
                   ))}
                 </div>
-                <p className="text-xs text-ink/40 mt-2">Attendance, salary and payslips are kept per period — open a period above to see them.</p>
+                <p className="text-xs text-ink/40 mt-2">Attendance, salary and payslips are kept per period and Cost Center — open a period above to see them.{detail.service_start_date ? ` Continuous service since ${formatDate(detail.service_start_date)}.` : ""}</p>
               </div>
             )}
             <EmployeeReviewSummary detail={detail} onPreviewDocument={(doc) => setPreviewDoc(doc)} />
@@ -632,14 +756,34 @@ export default function EmployeeProfile() {
                         <option value="PENDING">Pending</option>
                         <option value="IN_PROGRESS">In Progress</option>
                         <option value="COMPLETED">Completed</option>
+                        <option value="NOT_REQUIRED">Not required (internal transfer)</option>
                       </Select>
                       <Input label="Last Working Date" type="date" value={checklist.last_working_date || ""} onChange={(e) => setChecklist({ ...checklist, last_working_date: e.target.value })} />
                     </div>
                     <Input label="Remarks" value={checklist.remarks || ""} onChange={(e) => setChecklist({ ...checklist, remarks: e.target.value })} />
                     <div className="flex gap-2">
                       <Button onClick={saveChecklist} disabled={sepBusy}>{sepBusy ? "Saving…" : "Save Checklist"}</Button>
-                      <Button variant="accent" onClick={completeSeparation} disabled={sepBusy}>Mark as Separated</Button>
-                      <Button variant="outline" onClick={cancelSeparation} disabled={sepBusy}>Cancel Exit</Button>
+                      <Button variant="accent" onClick={completeSeparation} disabled={sepBusy}>
+                        {detail.transfer ? "Approve Exit & Mark as Separated" : "Mark as Separated"}
+                      </Button>
+                      {!detail.transfer && <Button variant="outline" onClick={cancelSeparation} disabled={sepBusy}>Cancel Exit</Button>}
+                    </div>
+                    {detail.transfer && (
+                      <p className="text-xs text-ink/40">This exit is part of a Cost Center transfer — it is approved by an approver, and can be undone only via "Cancel transfer" above.</p>
+                    )}
+                  </>
+                )}
+                {!can("employee.separate") && detail.transfer?.direction === "OUT" && (
+                  <>
+                    <SectionDivider>Exit Checklist</SectionDivider>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <Field label="Exit Interview" value={detail.separation?.exit_interview_done ? "Done" : "Pending"} />
+                      <Field label="Asset Return" value={detail.separation?.asset_return_done ? "Done" : "Pending"} />
+                      <Field label="Clearance" value={detail.separation?.clearance_done ? "Done" : "Pending"} />
+                      <Field label="Document Issuance" value={detail.separation?.document_issuance_done ? "Done" : "Pending"} />
+                    </div>
+                    <div>
+                      <Button variant="accent" onClick={completeSeparation} disabled={sepBusy}>Approve Exit & Mark as Separated</Button>
                     </div>
                   </>
                 )}

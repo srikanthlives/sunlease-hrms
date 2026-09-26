@@ -16,7 +16,7 @@ const ALL_COLUMNS = [
     render: (r) => (
       <>
         {`${r.first_name} ${r.last_name}`}
-        {r.rejoined && <span className="ml-2 text-[10px] font-medium uppercase tracking-wide text-accent-600">Rejoined</span>}
+        {r.rejoined && <span className="ml-2 text-[10px] font-medium uppercase tracking-wide text-accent-600">{r.origin === "TRANSFER" ? "Transferred in" : "Rejoined"}</span>}
       </>
     ),
   },

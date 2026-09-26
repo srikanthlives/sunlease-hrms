@@ -1,4 +1,5 @@
 import secrets
+import os
 from datetime import date, timedelta
 
 from fastapi import HTTPException, status
@@ -7,8 +8,8 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.models.enums import EpisodeStatus, RoleName
 from app.models.models import (
-    BankAccount, CostAllocation, Dependent, DrivingLicenceDetail, EmploymentEpisode, Nominee,
-    OrgAssignment, Role, StatutoryInfo, User,
+    Address, BankAccount, CostAllocation, Department, Dependent, DocumentMeta, DrivingLicenceDetail, Employee,
+    EmploymentEpisode, LeaveBalance, Nominee, OrgAssignment, Project, Role, StatutoryInfo, User,
 )
 
 
@@ -100,6 +101,13 @@ def provision_self_service_login(db: Session, episode: EmploymentEpisode) -> dic
     the caller must surface it once), or None if a login already existed."""
     existing = db.query(User).filter(User.employee_id == episode.employee_id).first()
     if existing:
+        # The login name is the employee number; a transfer to another Cost
+        # Center gives a new number, so keep the username in step with it.
+        if existing.username != episode.employee_number and not db.query(User).filter(
+            User.username == episode.employee_number, User.id != existing.id,
+        ).first():
+            existing.username = episode.employee_number
+            db.add(existing)
         if not existing.is_active:
             # Disabled at the employee's earlier exit (disable_self_service_login)
             # - re-enable on rejoin with a fresh one-time PIN.
@@ -202,38 +210,136 @@ def last_cost_center_id(db: Session, episode_id: int) -> int | None:
     return alloc.cost_center_id if alloc else None
 
 
-def create_rejoin_episode(db: Session, prior: EmploymentEpisode, date_of_joining: date, user: User) -> EmploymentEpisode:
-    """Starts a new stint (DRAFT, same Employee, SAME employee number) for a
-    person whose previous stint is fully Separated. Goes through the normal
-    wizard/approval like any new joiner. The two stints are separate
-    service periods - nothing accrues across them.
+def home_cost_center_id(db: Session, episode_id: int) -> int | None:
+    """The Cost Center a stint belongs to: its open Cost Center/Department
+    assignment, else (a draft converted from a candidate, which only has a
+    cost allocation so far) its open cost allocation."""
+    a = db.query(OrgAssignment).filter(OrgAssignment.episode_id == episode_id, OrgAssignment.effective_to.is_(None)).first()
+    if a:
+        return a.cost_center_id
+    al = db.query(CostAllocation).filter(CostAllocation.episode_id == episode_id, CostAllocation.effective_to.is_(None)).first()
+    return al.cost_center_id if al else None
 
-    Carried into the new draft as editable starting points: employment info
-    (type/category/designation/location/shift), the latest bank account and
+
+def guard_cost_center_change(db: Session, episode: EmploymentEpisode, new_cost_center_id: int) -> None:
+    """Project/Department can change freely inside a Cost Center, but the
+    Cost Center itself is fixed once a stint is live - moving to another one
+    is a Transfer (exit in the old, entry in the new). A rejoin/transfer
+    draft has its Cost Center fixed from the start."""
+    home = home_cost_center_id(db, episode.id)
+    if home is None or home == new_cost_center_id:
+        return
+    live = episode.status not in (EpisodeStatus.DRAFT, EpisodeStatus.PENDING_APPROVAL)
+    if live or episode.previous_episode_id is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "A Cost Center change is a Transfer - use the Transfer action (exit from the current Cost Center, entry into the new one)",
+        )
+
+
+def guard_allocation_cost_center(db: Session, episode: EmploymentEpisode, cost_center_id: int) -> None:
+    """Each Cost Center's employment is kept separate - cost is not split
+    across Cost Centers (Projects inside the Cost Center can still be split)."""
+    home = home_cost_center_id(db, episode.id)
+    if home is not None and cost_center_id != home:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Cost allocation must stay within the employee's own Cost Center - employment in each Cost Center is kept separate (use Transfer to move)",
+        )
+
+
+def number_for_cost_center(db: Session, employee_id: int, cost_center_id: int) -> tuple[str, EmploymentEpisode] | None:
+    """The employee number this person held the last time they served in
+    the given Cost Center, if ever - a number identifies a person within a
+    Cost Center, so coming back reuses it."""
+    for e in db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == employee_id).order_by(EmploymentEpisode.id.desc()).all():
+        if last_cost_center_id(db, e.id) == cost_center_id:
+            return e.employee_number, e
+    return None
+
+
+def check_number_available(db: Session, number: str, employee_id: int, cost_center_id: int | None, exclude_episode_id: int | None = None) -> None:
+    """409 unless `number` can be used by this person in this Cost Center:
+    never on another person's record, never while live on another record,
+    and (for this person's own earlier records) only in the Cost Center it
+    was originally issued for."""
+    q = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == number)
+    if exclude_episode_id:
+        q = q.filter(EmploymentEpisode.id != exclude_episode_id)
+    for e in q.all():
+        if e.employee_id != employee_id or e.status != EpisodeStatus.SEPARATED:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Employee Number already in use")
+        if cost_center_id is not None and last_cost_center_id(db, e.id) != cost_center_id:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This employee number was issued for a different Cost Center - use a new number")
+
+
+def purge_draft_episode(db: Session, episode: EmploymentEpisode) -> None:
+    """Hard-deletes a DRAFT stint and everything hanging off it (its Employee
+    row too if it was that person's only stint). Caller commits."""
+    from app.services import document_service  # local: avoids an import cycle
+
+    for document in db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).all():
+        try:
+            path = document_service.resolve_file_path(document)
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).delete(synchronize_session=False)
+    for model in (OrgAssignment, CostAllocation, StatutoryInfo, BankAccount, Dependent, Nominee, DrivingLicenceDetail):
+        db.query(model).filter(model.episode_id == episode.id).delete(synchronize_session=False)
+    employee_id = episode.employee_id
+    db.query(EmploymentEpisode).filter(EmploymentEpisode.id == episode.id).delete(synchronize_session=False)
+    if db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == employee_id).count() == 0:
+        db.query(Address).filter(Address.employee_id == employee_id).delete(synchronize_session=False)
+        db.query(Employee).filter(Employee.id == employee_id).delete(synchronize_session=False)
+
+
+def create_new_stint(
+    db: Session, prior: EmploymentEpisode, date_of_joining: date, cost_center_id: int, project_id: int, department_id: int,
+    employee_number: str | None, continuous_service: bool,
+) -> EmploymentEpisode:
+    """Starts a new DRAFT stint for an existing person in `cost_center_id`
+    (shared by Rejoin and Transfer). Number: the one they held in that Cost
+    Center before if any, else `employee_number` (required, must be free).
+    Goes through the normal wizard/approval afterwards.
+
+    Carried as editable starting points: employment info, latest bank and
     statutory record (UAN/ESI numbers), dependents, nominees, driving
-    licence. NOT carried: cost center/department assignments, salary
-    structure, attendance, leave, payroll, documents - all start fresh."""
-    if prior.status != EpisodeStatus.SEPARATED:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a fully Separated employee can rejoin")
-    other_live = db.query(EmploymentEpisode).filter(
-        EmploymentEpisode.employee_id == prior.employee_id, EmploymentEpisode.status != EpisodeStatus.SEPARATED,
-    ).first()
-    if other_live:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This employee already has a current or pending employment record")
-    latest = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == prior.employee_id).order_by(EmploymentEpisode.id.desc()).first()
-    if latest.id != prior.id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rejoin from this employee's most recent employment record")
-    if prior.separation_date and date_of_joining <= prior.separation_date:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rejoining date must be after the previous exit date")
+    licence. The Cost Center/Department assignment and 100% cost allocation
+    are created for the chosen Cost Center. Salary structure, attendance,
+    payroll and documents start fresh. continuous_service (INTERNAL transfer
+    only) additionally carries service start, confirmation date and this
+    year's leave usage/opening so entitlements and gratuity service continue."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project or project.cost_center_id != cost_center_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Project does not belong to the selected Cost Center")
+    if not db.query(Department).filter(Department.id == department_id, Department.is_active.is_(True)).first():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Department not found")
+
+    reuse = number_for_cost_center(db, prior.employee_id, cost_center_id)
+    if reuse:
+        number = reuse[0]
+    else:
+        number = (employee_number or "").strip()
+        if not number:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "A new Employee Number is required for this Cost Center")
+    check_number_available(db, number, prior.employee_id, cost_center_id)
 
     new = EmploymentEpisode(
-        employee_id=prior.employee_id, employee_number=prior.employee_number, status=EpisodeStatus.DRAFT,
+        employee_id=prior.employee_id, employee_number=number, status=EpisodeStatus.DRAFT,
         date_of_joining=date_of_joining, previous_episode_id=prior.id,
         employment_type_id=prior.employment_type_id, employee_category_id=prior.employee_category_id,
-        designation_id=prior.designation_id, work_location_id=prior.work_location_id, shift_group=prior.shift_group,
+        designation_id=prior.designation_id, work_location_id=None, shift_group=prior.shift_group,
     )
+    if continuous_service:
+        new.service_start_date = prior.service_start_date or prior.date_of_joining
+        new.confirmation_date = prior.confirmation_date
     db.add(new)
     db.flush()
+
+    db.add(OrgAssignment(episode_id=new.id, cost_center_id=cost_center_id, department_id=department_id, project_id=project_id, effective_from=date_of_joining))
+    db.add(CostAllocation(episode_id=new.id, cost_center_id=cost_center_id, project_id=project_id, percentage=100, effective_from=date_of_joining))
 
     def newest(model):
         return db.query(model).filter(model.episode_id == prior.id).order_by(model.effective_from.desc(), model.id.desc()).first()
@@ -267,5 +373,29 @@ def create_rejoin_episode(db: Session, prior: EmploymentEpisode, date_of_joining
             episode_id=new.id, licence_number=dl.licence_number, badge_number=dl.badge_number, vehicle_class=dl.vehicle_class,
             issuing_authority=dl.issuing_authority, issue_date=dl.issue_date, expiry_date=dl.expiry_date,
         ))
+    if continuous_service:
+        for b in db.query(LeaveBalance).filter(LeaveBalance.episode_id == prior.id, LeaveBalance.year == date_of_joining.year).all():
+            db.add(LeaveBalance(
+                episode_id=new.id, leave_type_id=b.leave_type_id, year=b.year,
+                opening_balance=b.opening_balance, accrued=0, used=b.used, adjusted=b.adjusted,
+            ))
     db.flush()
     return new
+
+
+def create_rejoin_episode(
+    db: Session, prior: EmploymentEpisode, date_of_joining: date, cost_center_id: int, project_id: int, department_id: int,
+    employee_number: str | None, user: User,
+) -> EmploymentEpisode:
+    """Re-hires a fully Separated person (after a real exit - separate
+    service, nothing carries over) into the chosen Cost Center."""
+    if prior.status != EpisodeStatus.SEPARATED:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a fully Separated employee can rejoin")
+    if db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == prior.employee_id, EmploymentEpisode.status != EpisodeStatus.SEPARATED).first():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This employee already has a current or pending employment record")
+    latest = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == prior.employee_id).order_by(EmploymentEpisode.id.desc()).first()
+    if latest.id != prior.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rejoin from this employee's most recent employment record")
+    if prior.separation_date and date_of_joining <= prior.separation_date:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rejoining date must be after the previous exit date")
+    return create_new_stint(db, prior, date_of_joining, cost_center_id, project_id, department_id, employee_number, continuous_service=False)

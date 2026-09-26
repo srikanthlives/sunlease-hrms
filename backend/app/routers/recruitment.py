@@ -16,7 +16,7 @@ from app.schemas.recruitment import (
     CandidateIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
-from app.services import audit_service, candidate_bulk_import_service, document_service, licence_service, permission_service, recruitment_service
+from app.services import audit_service, candidate_bulk_import_service, document_service, employee_service, licence_service, permission_service, recruitment_service
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
 
@@ -204,12 +204,12 @@ def _candidate_detail_dict(db: Session, c: Candidate) -> dict:
 
 
 def _rejoin_number(db: Session, c: Candidate) -> str | None:
-    """A requalified ex-employee keeps their old employee number on rejoining."""
+    """A requalified ex-employee coming back to a Cost Center they served
+    before keeps their number there (None = a new number is entered)."""
     if not c.converted_employee_id or c.status == "CONVERTED":
         return None
-    from app.models.models import EmploymentEpisode
-    prior = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == c.converted_employee_id).order_by(EmploymentEpisode.id.desc()).first()
-    return prior.employee_number if prior else None
+    found = employee_service.number_for_cost_center(db, c.converted_employee_id, c.applied_cost_center_id)
+    return found[0] if found else None
 
 
 def _get_candidate(db: Session, candidate_id: int) -> Candidate:

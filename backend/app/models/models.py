@@ -371,8 +371,12 @@ class EmploymentEpisode(Base):
     id = Column(Integer, primary_key=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
     employee_number = Column(String(50), nullable=False)
-    # Set on a rejoin stint: the earlier stint this one follows.
+    # Set on a rejoin/transfer stint: the earlier stint this one follows.
     previous_episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=True)
+    # Start of continuous service. Only set when this stint continues an
+    # earlier one across an INTERNAL transfer (see transfer_service); null
+    # means service starts at date_of_joining. Gratuity counts from here.
+    service_start_date = Column(Date, nullable=True)
 
     # Legacy free-text columns (Phase 1) - superseded by the FK master
     # tables below (Designation/WorkLocation/EmployeeType, admin-managed
@@ -1495,6 +1499,34 @@ class CandidateStageResult(Base):
     candidate = relationship("Candidate", back_populates="stage_results")
     criteria = relationship("SelectionCriteria")
     reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
+
+
+class EmployeeTransfer(Base):
+    """A Cost Center change for an existing employee (transfer_service).
+    Closes the employee's stint in the old Cost Center (exit formalities,
+    approved by the exit-side approver) and opens a new stint in the new one
+    (entry formalities, approved by the destination approver). INTERNAL
+    transfers keep service continuous (leave balance/gratuity service carry
+    over, no final settlement); RESIGNATION ones do not."""
+
+    __tablename__ = "employee_transfers"
+
+    id = Column(Integer, primary_key=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    from_episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=False)
+    to_episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=True)
+    from_cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=True)
+    to_cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=False)
+    transfer_type = Column(String(20), nullable=False)  # INTERNAL / RESIGNATION
+    transfer_date = Column(Date, nullable=False)  # joining date in the new Cost Center
+    status = Column(String(20), default="INITIATED", nullable=False)  # INITIATED / COMPLETED / CANCELLED
+    remarks = Column(Text, nullable=True)
+    initiated_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=now)
+    completed_at = Column(DateTime, nullable=True)
+
+    from_cost_center = relationship("CostCenter", foreign_keys=[from_cost_center_id])
+    to_cost_center = relationship("CostCenter", foreign_keys=[to_cost_center_id])
 
 
 class CandidateDocument(Base):

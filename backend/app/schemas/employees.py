@@ -195,6 +195,20 @@ class ChangeRequestReview(BaseModel):
 
 class RejoinIn(BaseModel):
     date_of_joining: date
+    cost_center_id: int
+    project_id: int
+    department_id: int
+    employee_number: str | None = None  # only needed for a Cost Center they never served before
+
+
+class TransferIn(BaseModel):
+    transfer_type: str  # INTERNAL / RESIGNATION
+    cost_center_id: int
+    project_id: int
+    department_id: int
+    transfer_date: date  # joining date in the new Cost Center
+    employee_number: str | None = None  # only needed for a Cost Center they never served before
+    remarks: str | None = None
 
 
 class SeparationIn(BaseModel):

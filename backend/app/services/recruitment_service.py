@@ -437,11 +437,17 @@ def convert_to_employee(
     if employee:
         prior = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_id == employee.id).order_by(EmploymentEpisode.id.desc()).first()
         if prior and prior.status != "SEPARATED":
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This person still has a current employment record - they must be Separated before rejoining")
-        if prior:
-            employee_number = prior.employee_number
-    clash = db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first()
-    if clash and not (employee and clash.employee_id == employee.id):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "This person still has a current employment record - use Transfer on their employee record to move them to another Cost Center",
+            )
+        # An employee number identifies a person within a Cost Center: coming
+        # back to one they served before reuses that number.
+        reuse = employee_service.number_for_cost_center(db, employee.id, candidate.applied_cost_center_id)
+        if reuse:
+            employee_number = reuse[0]
+        employee_service.check_number_available(db, employee_number, employee.id, candidate.applied_cost_center_id)
+    elif db.query(EmploymentEpisode).filter(EmploymentEpisode.employee_number == employee_number).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "Employee Number already in use")
 
     if not employee:
