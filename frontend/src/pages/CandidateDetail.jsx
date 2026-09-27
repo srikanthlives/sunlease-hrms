@@ -422,7 +422,7 @@ export default function CandidateDetail() {
           {isApplied && (
             <Button variant="accent" onClick={submitForApproval} disabled={busy}>Submit for Approval</Button>
           )}
-          {isPendingApproval && (
+          {isPendingApproval && candidate.can_approve && (
             <>
               <Button variant="accent" onClick={approveSubmission} disabled={busy}>Approve</Button>
               <Button variant="outline" onClick={returnForCorrection} disabled={busy}>Send Back for Correction</Button>
@@ -442,6 +442,7 @@ export default function CandidateDetail() {
           )}
         </div>
         {isApplied && <p className="text-xs text-ink/40 mt-2">Selection Criteria can't be recorded until this candidate is approved.</p>}
+        {isPendingApproval && !candidate.can_approve && <p className="text-xs text-ink/40 mt-2">Submitted for approval — waiting for an approver to review it.</p>}
         {isRejected && <p className="text-xs text-ink/40 mt-2">Disqualified — Requalify to reconsider this candidate; they'll re-enter the pipeline at Applied.</p>}
         {isConverted && <p className="text-xs text-ink/40 mt-2">Converted to employee — Requalify only if this person has since resigned/separated and is reapplying as a new candidate.</p>}
         {transferOpen && !isTerminal && (

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_hr_admin, require_permission
 from app.db.session import atomic_session, get_db
-from app.models.enums import AuditAction, Permission
+from app.models.enums import AuditAction, Permission, TransactionType
 from app.models.models import (
     Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
     DesignationCriteria, Project, SelectionCriteria, User,
@@ -175,12 +175,18 @@ def _candidate_summary_dict(c: Candidate) -> dict:
         "applied_employee_category_name": c.employee_category.name if c.employee_category else None,
         "applied_date": c.applied_date, "status": c.status,
         "mobile_number": c.mobile_number,
+        # Extra list-view columns (hidden by default in the UI).
+        "gender": c.gender, "date_of_birth": c.date_of_birth, "alternate_mobile_number": c.alternate_mobile_number,
+        "personal_email": c.personal_email, "educational_qualification": c.educational_qualification,
+        "total_experience_years": c.total_experience_years, "current_designation": c.current_designation,
+        "current_company_name": c.current_company_name, "source": c.source, "remarks": c.remarks, "created_at": c.created_at,
     }
 
 
-def _candidate_detail_dict(db: Session, c: Candidate) -> dict:
+def _candidate_detail_dict(db: Session, c: Candidate, user: User | None = None) -> dict:
     return {
         **_candidate_summary_dict(c),
+        "can_approve": recruitment_service.can_review(db, user, c) if user else False,
         "middle_name": c.middle_name, "father_husband_name": c.father_husband_name,
         "gender": c.gender, "date_of_birth": c.date_of_birth,
         "alternate_mobile_number": c.alternate_mobile_number, "personal_email": c.personal_email,
@@ -296,8 +302,8 @@ def create_candidate(payload: CandidateIn, db: Session = Depends(get_db), user: 
 
 
 @router.get("/candidates/{candidate_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
-def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
-    return _candidate_detail_dict(db, _get_candidate(db, candidate_id))
+def get_candidate(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return _candidate_detail_dict(db, _get_candidate(db, candidate_id), user)
 
 
 @router.put("/candidates/{candidate_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
@@ -580,14 +586,18 @@ def _change_request_dict(r: CandidateChangeRequest) -> dict:
 
 
 @router.get("/candidates-change-requests", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
-def list_candidate_change_requests(status_: str | None = Query("PENDING"), candidate_id: int | None = None, db: Session = Depends(get_db)):
+def list_candidate_change_requests(status_: str | None = Query("PENDING"), candidate_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(CandidateChangeRequest)
     if status_:
         query = query.filter(CandidateChangeRequest.status == status_)
     if candidate_id is not None:
         query = query.filter(CandidateChangeRequest.candidate_id == candidate_id)
     rows = query.order_by(CandidateChangeRequest.created_at.desc()).all()
-    return [_change_request_dict(r) for r in rows]
+    candidates = {c.id: c for c in db.query(Candidate).filter(Candidate.id.in_({r.candidate_id for r in rows})).all()} if rows else {}
+    return [
+        {**_change_request_dict(r), "can_review": bool(candidates.get(r.candidate_id)) and recruitment_service.can_review(db, user, candidates[r.candidate_id], TransactionType.RECRUITMENT_CHANGE)}
+        for r in rows
+    ]
 
 
 @router.post("/candidates-change-requests/{request_id}/approve")

@@ -99,8 +99,14 @@ export default function CandidateChangeRequests() {
                     )}
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="outline" onClick={() => navigate(`/recruitment/candidates/${r.candidate_id}`)}>View Candidate</Button>
-                      <Button size="sm" variant="accent" onClick={() => act(r.id, "approve")} disabled={busyId === r.id}>Approve</Button>
-                      <Button size="sm" variant="danger" onClick={() => act(r.id, "reject")} disabled={busyId === r.id}>Reject</Button>
+                      {r.can_review ? (
+                        <>
+                          <Button size="sm" variant="accent" onClick={() => act(r.id, "approve")} disabled={busyId === r.id}>Approve</Button>
+                          <Button size="sm" variant="danger" onClick={() => act(r.id, "reject")} disabled={busyId === r.id}>Reject</Button>
+                        </>
+                      ) : (
+                        <span className="text-xs text-ink/40">Awaiting an approver</span>
+                      )}
                     </div>
                   </div>
                 )}

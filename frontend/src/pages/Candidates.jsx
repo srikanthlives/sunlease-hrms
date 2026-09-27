@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { X, Upload, Download } from "lucide-react";
+import { X, Upload, Download, SlidersHorizontal } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
-import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, Pagination, usePagination, formatAadhaar, formatDate } from "../components/ui";
+import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
 
 const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED", "WITHDRAWN"];
 
@@ -15,6 +15,60 @@ const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 function formatError(value, regex, message) {
   return value && !regex.test(value) ? message : undefined;
+}
+
+// "COMP1/GC-SMART-PY/GCM-PRTC-50/STAFF/001" -> "../GCM-PRTC-50/STAFF/001": the
+// Company and Cost Center segments are dropped from the list view (the full
+// number is in the tooltip and on the candidate's page).
+function shortReference(ref) {
+  const parts = (ref || "").split("/");
+  return parts.length > 2 ? `../${parts.slice(2).join("/")}` : ref || "—";
+}
+
+const ALL_COLUMNS = [
+  {
+    key: "reference_number", header: "Reference #", sortable: true, defaultVisible: true, noTruncate: true, sticky: true, stickyWidth: 280,
+    render: (r) => (
+      <span className="block overflow-hidden text-ellipsis whitespace-nowrap" style={{ width: 250, maxWidth: 250 }} title={r.reference_number}>
+        {shortReference(r.reference_number)}
+      </span>
+    ),
+  },
+  {
+    key: "name", header: "Name", sortable: true, defaultVisible: true, noTruncate: true, sticky: true, stickyWidth: 180,
+    sortAccessor: (r) => `${r.last_name} ${r.first_name}`,
+    render: (r) => <span className="font-semibold text-ink" title={`${r.first_name} ${r.last_name}`}>{`${r.first_name} ${r.last_name}`}</span>,
+  },
+  { key: "designation_name", header: "Applied For", sortable: true, fixedWidth: 150, defaultVisible: true, render: (r) => r.designation_name || "—" },
+  { key: "cost_center_name", header: "Cost Center", sortable: true, fixedWidth: 170, defaultVisible: true, render: (r) => r.cost_center_name || "—" },
+  { key: "applied_project_name", header: "Project", sortable: true, fixedWidth: 170, defaultVisible: true, render: (r) => r.applied_project_name || "—" },
+  { key: "applied_employee_category_name", header: "Category", sortable: true, fixedWidth: 140, defaultVisible: true, render: (r) => r.applied_employee_category_name || "—" },
+  { key: "applied_date", header: "Applied On", sortable: true, fixedWidth: 110, defaultVisible: true, tooltip: (r) => formatDate(r.applied_date), render: (r) => formatDate(r.applied_date) },
+  { key: "mobile_number", header: "Mobile", sortable: true, fixedWidth: 120, defaultVisible: true, render: (r) => r.mobile_number || "—" },
+  { key: "status", header: "Status", sortable: true, fixedWidth: 130, defaultVisible: true, render: (r) => <StatusBadge status={r.status} /> },
+  { key: "gender", header: "Gender", sortable: true, fixedWidth: 90, defaultVisible: false, render: (r) => r.gender || "—" },
+  { key: "date_of_birth", header: "Date of Birth", sortable: true, fixedWidth: 110, defaultVisible: false, tooltip: (r) => formatDate(r.date_of_birth), render: (r) => formatDate(r.date_of_birth) },
+  { key: "alternate_mobile_number", header: "Alternate Mobile", sortable: true, fixedWidth: 130, defaultVisible: false, render: (r) => r.alternate_mobile_number || "—" },
+  { key: "personal_email", header: "Email", sortable: true, fixedWidth: 200, defaultVisible: false, render: (r) => r.personal_email || "—" },
+  { key: "educational_qualification", header: "Qualification", sortable: true, fixedWidth: 160, defaultVisible: false, render: (r) => r.educational_qualification || "—" },
+  { key: "total_experience_years", header: "Experience (yrs)", sortable: true, fixedWidth: 110, defaultVisible: false, render: (r) => (r.total_experience_years ?? "—") },
+  { key: "current_designation", header: "Current Designation", sortable: true, fixedWidth: 160, defaultVisible: false, render: (r) => r.current_designation || "—" },
+  { key: "current_company_name", header: "Current Company", sortable: true, fixedWidth: 180, defaultVisible: false, render: (r) => r.current_company_name || "—" },
+  { key: "source", header: "Source", sortable: true, fixedWidth: 120, defaultVisible: false, render: (r) => r.source || "—" },
+  { key: "remarks", header: "Remarks", sortable: true, fixedWidth: 220, defaultVisible: false, render: (r) => r.remarks || "—" },
+  { key: "created_at", header: "Registered On", sortable: true, fixedWidth: 120, defaultVisible: false, tooltip: (r) => formatDate(r.created_at), render: (r) => formatDate(r.created_at) },
+];
+
+const VISIBLE_COLUMNS_KEY = "hrms_candidates_visible_columns_v1";
+
+function loadVisibleColumns() {
+  try {
+    const raw = localStorage.getItem(VISIBLE_COLUMNS_KEY);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch {
+    // fall through to default
+  }
+  return new Set(ALL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key));
 }
 
 const EMPTY_FORM = {
@@ -37,6 +91,9 @@ export default function Candidates() {
   // Defaults to APPROVED - the most commonly-worked-with state (Selection
   // Criteria being recorded / ready to convert), same reasoning as
   // Employees defaulting to ACTIVE.
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
+  const [sort, setSort] = useState(null);
   const [statusFilter, setStatusFilter] = useState("APPROVED");
   const [costCenterFilter, setCostCenterFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
@@ -131,17 +188,23 @@ export default function Candidates() {
     }
   }
 
-  const columns = [
-    { key: "reference_number", header: "Reference #", noTruncate: true, sticky: true, stickyWidth: 170 },
-    { key: "name", header: "Name", noTruncate: true, sticky: true, stickyWidth: 180, render: (r) => `${r.first_name} ${r.last_name}` },
-    { key: "designation_name", header: "Applied For", render: (r) => r.designation_name || "—" },
-    { key: "cost_center_name", header: "Cost Center", render: (r) => r.cost_center_name || "—" },
-    { key: "applied_project_name", header: "Project", render: (r) => r.applied_project_name || "—" },
-    { key: "applied_employee_category_name", header: "Category", render: (r) => r.applied_employee_category_name || "—" },
-    { key: "applied_date", header: "Applied On", render: (r) => formatDate(r.applied_date) },
-    { key: "mobile_number", header: "Mobile", render: (r) => r.mobile_number || "—" },
-    { key: "status", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
-  ];
+  const columns = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
+
+  useEffect(() => {
+    localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify([...visibleColumns]));
+  }, [visibleColumns]);
+
+  function toggleColumn(key) {
+    setVisibleColumns((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
+  function resetColumns() {
+    setVisibleColumns(new Set(ALL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key)));
+  }
 
   const searchTerm = search.trim().toLowerCase();
   const visibleCandidates = candidates.filter((c) => {
@@ -166,7 +229,9 @@ export default function Candidates() {
   }
 
   useEffect(() => setPage(1), [search, statusFilter, costCenterFilter, projectFilter, categoryFilter]);
-  const { pageRows, page: safePage, pageCount, total } = usePagination(visibleCandidates, page, pageSize);
+  const sortedCandidates = useMemo(() => sortRows(visibleCandidates, ALL_COLUMNS, sort), [visibleCandidates, sort]);
+  useEffect(() => setPage(1), [sort]);
+  const { pageRows, page: safePage, pageCount, total } = usePagination(sortedCandidates, page, pageSize);
 
   const canCreate = form.first_name && form.last_name && form.applied_designation_id
     && form.applied_employee_category_id && form.applied_cost_center_id && form.applied_project_id
@@ -332,8 +397,35 @@ export default function Candidates() {
               <X size={14} /> Clear
             </Button>
           )}
+
+          <div className="relative ml-auto">
+            <Button variant="outline" size="sm" onClick={() => setColumnsOpen((o) => !o)} className="gap-1.5">
+              <SlidersHorizontal size={14} /> Columns
+            </Button>
+            {columnsOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setColumnsOpen(false)} />
+                <div className="absolute right-0 mt-2 w-56 bg-white border border-ink/10 rounded-md shadow-card z-20 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold text-ink/60 uppercase tracking-wide">Show Columns</span>
+                    <button className="text-xs text-brand-700 hover:underline" onClick={resetColumns}>Reset</button>
+                  </div>
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                    {ALL_COLUMNS.map((c) => (
+                      <label key={c.key} className="flex items-center gap-2 text-sm text-ink/80">
+                        <input type="checkbox" checked={visibleColumns.has(c.key)} onChange={() => toggleColumn(c.key)} />
+                        {c.header}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
         <Table
+          sort={sort} onSortChange={setSort}
+          singleLine
           columns={columns} rows={pageRows} onRowClick={(r) => navigate(`/recruitment/candidates/${r.id}`)}
           empty={candidates.length === 0 ? "No candidates yet." : "No candidates match the current filters."}
           stickyHeader

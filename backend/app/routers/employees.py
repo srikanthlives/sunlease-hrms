@@ -14,7 +14,7 @@ from app.db.session import atomic_session, get_db
 from app.models.enums import AddressType, AuditAction, EpisodeStatus, Permission, RoleName, TransactionType
 from app.models.models import (
     Employee, Address, EmploymentEpisode, StatutoryInfo, BankAccount, Dependent, Nominee,
-    SeparationRecord, ChangeRequest, AuditLog, User, OrgAssignment, CostAllocation, CostCenter, Department,
+    SeparationRecord, ChangeRequest, AuditLog, User, OrgAssignment, CostAllocation, CostCenter, Department, Project,
     DocumentMeta, DrivingLicenceDetail, EmployeeTransfer,
 )
 from app.schemas.employees import (
@@ -216,6 +216,7 @@ def list_employees(
             allocation_by_episode[al.episode_id] = al
     cost_centers = {c.id: c.name for c in db.query(CostCenter.id, CostCenter.name).all()}
     departments = {d.id: d.name for d in db.query(Department.id, Department.name).all()}
+    project_names = {p.id: p.name for p in db.query(Project.id, Project.name).all()}
 
     transferred_in_ids = {t.to_episode_id for t in db.query(EmployeeTransfer).filter(EmployeeTransfer.status != "CANCELLED").all() if t.to_episode_id}
 
@@ -252,6 +253,14 @@ def list_employees(
             "work_location": e.work_location.name if e.work_location else None,
             "cost_center": cost_centers.get(cc_id),
             "department": departments.get(assignment.department_id) if assignment else None,
+            "project": project_names.get(assignment.project_id) if assignment and assignment.project_id else None,
+            "father_husband_name": e.employee.father_husband_name,
+            "date_of_birth": e.employee.date_of_birth,
+            "personal_email": e.employee.personal_email,
+            "alternate_mobile_number": e.employee.alternate_mobile_number,
+            "confirmation_date": e.confirmation_date,
+            "shift_group": e.shift_group,
+            "application_reference_number": e.application_reference_number,
             "status": e.status,
         })
     return rows

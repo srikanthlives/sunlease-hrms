@@ -210,6 +210,18 @@ def authorize_candidate_approval(db: Session, user: User, candidate: Candidate, 
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Requires the Approver role (no approval rule matched)")
 
 
+def can_review(db: Session, user: User, candidate: Candidate, transaction_type: str = TransactionType.RECRUITMENT_APPROVAL) -> bool:
+    """Whether `user` is allowed to approve/send back this candidate (or, with
+    RECRUITMENT_CHANGE, its change requests) - the same routing check the
+    approve endpoints enforce, exposed so the UI only offers the buttons to
+    people who can actually use them."""
+    try:
+        authorize_candidate_approval(db, user, candidate, transaction_type)
+        return True
+    except HTTPException:
+        return False
+
+
 def submit_candidate(db: Session, candidate: Candidate, user: User) -> None:
     if candidate.status != CandidateStatus.APPLIED:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only an Applied candidate can be submitted for approval")

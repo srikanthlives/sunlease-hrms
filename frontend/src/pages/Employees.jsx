@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
-import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, formatDate } from "../components/ui";
+import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, sortRows, formatDate } from "../components/ui";
 
 const ALL_COLUMNS = [
   {
@@ -15,7 +15,7 @@ const ALL_COLUMNS = [
     sortAccessor: (r) => `${r.last_name} ${r.first_name}`,
     render: (r) => (
       <>
-        {`${r.first_name} ${r.last_name}`}
+        <span className="font-semibold text-ink">{`${r.first_name} ${r.last_name}`}</span>
         {r.rejoined && <span className="ml-2 text-[10px] font-medium uppercase tracking-wide text-accent-600">{r.origin === "TRANSFER" ? "Transferred in" : "Rejoined"}</span>}
       </>
     ),
@@ -32,6 +32,14 @@ const ALL_COLUMNS = [
   { key: "gender", header: "Gender", sortable: true, defaultVisible: false, maxWidth: 100, render: (r) => r.gender || "—" },
   { key: "mobile_number", header: "Mobile", sortable: true, defaultVisible: false, maxWidth: 130, render: (r) => r.mobile_number || "—" },
   { key: "official_email", header: "Official Email", sortable: true, defaultVisible: false, maxWidth: 200, render: (r) => r.official_email || "—" },
+  { key: "project", header: "Project", sortable: true, defaultVisible: false, maxWidth: 170, render: (r) => r.project || "—" },
+  { key: "father_husband_name", header: "Father's/Husband's Name", sortable: true, defaultVisible: false, maxWidth: 190, render: (r) => r.father_husband_name || "—" },
+  { key: "date_of_birth", header: "Date of Birth", sortable: true, defaultVisible: false, maxWidth: 130, render: (r) => formatDate(r.date_of_birth) },
+  { key: "personal_email", header: "Personal Email", sortable: true, defaultVisible: false, maxWidth: 200, render: (r) => r.personal_email || "—" },
+  { key: "alternate_mobile_number", header: "Alternate Mobile", sortable: true, defaultVisible: false, maxWidth: 140, render: (r) => r.alternate_mobile_number || "—" },
+  { key: "confirmation_date", header: "Confirmation Date", sortable: true, defaultVisible: false, maxWidth: 140, render: (r) => formatDate(r.confirmation_date) },
+  { key: "shift_group", header: "Shift Group", sortable: true, defaultVisible: false, maxWidth: 140, render: (r) => r.shift_group || "—" },
+  { key: "application_reference_number", header: "Application Ref.", sortable: true, defaultVisible: false, maxWidth: 220, render: (r) => r.application_reference_number || "—" },
 ];
 
 const STATUS_OPTIONS = ["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "SUSPENDED", "NOTICE_PERIOD", "SEPARATED"];
@@ -223,7 +231,10 @@ export default function Employees() {
   }, [rows, search, statusFilter, costCenterFilter, departmentFilter, employmentTypeFilter, categoryFilter]);
 
   useEffect(() => setPage(1), [search, statusFilter, costCenterFilter, departmentFilter, employmentTypeFilter, categoryFilter]);
-  const { pageRows, page: safePage, pageCount, total } = usePagination(filteredRows, page, pageSize);
+  const [sort, setSort] = useState(null);
+  const sortedRows = useMemo(() => sortRows(filteredRows, ALL_COLUMNS, sort), [filteredRows, sort]);
+  useEffect(() => setPage(1), [sort]);
+  const { pageRows, page: safePage, pageCount, total } = usePagination(sortedRows, page, pageSize);
 
   const columns = [...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)), makeActionsColumn(navigate, deleteEmployee)];
   const filtersActive = search || statusFilter || costCenterFilter || departmentFilter || employmentTypeFilter || categoryFilter;
@@ -322,6 +333,7 @@ export default function Employees() {
         ) : (
           <>
             <Table
+              sort={sort} onSortChange={setSort}
               columns={columns}
               rows={pageRows}
               keyField="episode_id"

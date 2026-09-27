@@ -173,37 +173,45 @@ export function formatAadhaar(value) {
   return digits.replace(/(\d{4})(?=\d)/g, "$1-");
 }
 
-export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No records found.", singleLine = false, stickyHeader = false }) {
-  const [sort, setSort] = useState(null); // { key, dir: "asc" | "desc" }
+// Sorts `rows` by the column named in `sort` ({ key, dir }) - shared so a page
+// can sort its WHOLE filtered list before paginating (otherwise a sort only
+// reorders the rows on the current page).
+export function sortRows(rows, columns, sort) {
+  if (!sort || !rows) return rows;
+  const col = columns.find((c) => c.key === sort.key);
+  if (!col) return rows;
+  const accessor = col.sortAccessor || ((r) => r[col.key]);
+  const sorted = [...rows].sort((a, b) => {
+    const av = accessor(a);
+    const bv = accessor(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" && typeof bv === "number") return av - bv;
+    return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
+  });
+  if (sort.dir === "desc") sorted.reverse();
+  return sorted;
+}
 
-  const sortedRows = useMemo(() => {
-    if (!sort || !rows) return rows;
-    const col = columns.find((c) => c.key === sort.key);
-    if (!col) return rows;
-    const accessor = col.sortAccessor || ((r) => r[col.key]);
-    const sorted = [...rows].sort((a, b) => {
-      const av = accessor(a);
-      const bv = accessor(b);
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      if (typeof av === "number" && typeof bv === "number") return av - bv;
-      return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
-    });
-    if (sort.dir === "desc") sorted.reverse();
-    return sorted;
-  }, [rows, sort, columns]);
+// Pass `sort` + `onSortChange` to control sorting from the page (rows are then
+// expected to arrive already sorted); omit them and the table sorts its own rows.
+export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No records found.", singleLine = false, stickyHeader = false, sort: controlledSort, onSortChange }) {
+  const controlled = onSortChange !== undefined;
+  const [internalSort, setInternalSort] = useState(null); // { key, dir: "asc" | "desc" }
+  const sort = controlled ? controlledSort : internalSort;
+  const setSort = controlled ? onSortChange : setInternalSort;
+
+  const sortedRows = useMemo(() => (controlled ? rows : sortRows(rows, columns, sort)), [rows, sort, columns, controlled]);
 
   if (!rows || rows.length === 0) {
     return <div className="text-sm text-ink/40 py-10 text-center">{empty}</div>;
   }
 
   function toggleSort(key) {
-    setSort((s) => {
-      if (!s || s.key !== key) return { key, dir: "asc" };
-      if (s.dir === "asc") return { key, dir: "desc" };
-      return null;
-    });
+    if (!sort || sort.key !== key) setSort({ key, dir: "asc" });
+    else if (sort.dir === "asc") setSort({ key, dir: "desc" });
+    else setSort(null);
   }
 
   // When any column declares a `width` (e.g. "20%"), the table switches to
@@ -268,6 +276,7 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
                 <th
                   key={c.key}
                   {...header}
+                  style={c.fixedWidth ? { ...(header.style || {}), width: c.fixedWidth + 24, minWidth: c.fixedWidth + 24 } : header.style}
                   className={`py-2 px-3 font-medium whitespace-nowrap ${c.align === "right" ? "text-right" : ""} ${stickyHeader ? "border-b border-ink/10" : ""} ${header.className || ""}`}
                 >
                   {c.sortable ? (
@@ -301,7 +310,7 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
                     <td key={c.key} {...sticky} className={`py-2.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""} ${sticky.className || ""}`}>
                       <span
                         className="block overflow-hidden text-ellipsis whitespace-nowrap"
-                        style={{ maxWidth: c.maxWidth || 200 }}
+                        style={c.fixedWidth ? { width: c.fixedWidth, maxWidth: c.fixedWidth } : { maxWidth: c.maxWidth || 200 }}
                         title={tooltipText}
                       >
                         {cellContent}
