@@ -20,19 +20,30 @@ function formatError(value, regex, message) {
 // "COMP1/GC-SMART-PY/GCM-PRTC-50/STAFF/001" -> "../GCM-PRTC-50/STAFF/001": the
 // Company and Cost Center segments are dropped from the list view (the full
 // number is in the tooltip and on the candidate's page).
-function shortReference(ref) {
+// "COMP1/GC-SMART-PY/GCM-PRTC-50/STAFF/001" -> prefix "../GCM-PRTC-50/STAFF",
+// tail "/001" - rendered as two spans so the sequence number at the end is
+// NEVER the part that gets cut off if the column is narrow; the prefix
+// (Project/Category, less critical for telling candidates apart) truncates
+// with an ellipsis instead.
+function splitReference(ref) {
   const parts = (ref || "").split("/");
-  return parts.length > 2 ? `../${parts.slice(2).join("/")}` : ref || "—";
+  if (parts.length <= 2) return { prefix: "", tail: ref || "—" };
+  const shown = parts.slice(2);
+  return { prefix: `../${shown.slice(0, -1).join("/")}`, tail: `/${shown[shown.length - 1]}` };
 }
 
 const ALL_COLUMNS = [
   {
     key: "reference_number", header: "Reference #", sortable: true, defaultVisible: true, noTruncate: true, sticky: true, stickyWidth: 280,
-    render: (r) => (
-      <span className="block overflow-hidden text-ellipsis whitespace-nowrap" style={{ width: 250, maxWidth: 250 }} title={r.reference_number}>
-        {shortReference(r.reference_number)}
-      </span>
-    ),
+    render: (r) => {
+      const { prefix, tail } = splitReference(r.reference_number);
+      return (
+        <span className="flex items-baseline" style={{ width: 220, maxWidth: 220 }} title={r.reference_number}>
+          {prefix && <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{prefix}</span>}
+          <span className="flex-none">{tail}</span>
+        </span>
+      );
+    },
   },
   {
     key: "name", header: "Name", sortable: true, defaultVisible: true, noTruncate: true, sticky: true, stickyWidth: 180,

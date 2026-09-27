@@ -262,7 +262,7 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
   // set here rather than relying on whatever ancestor happens to scroll.
   return (
     <div className={stickyHeader ? "overflow-auto" : "overflow-x-auto"} style={stickyHeader ? { maxHeight: "70vh" } : undefined}>
-      <table className="w-full text-sm" style={hasWidths ? { tableLayout: "fixed" } : undefined}>
+      <table className="w-full text-[13px]" style={hasWidths ? { tableLayout: "fixed" } : undefined}>
         {hasWidths && (
           <colgroup>
             {columns.map((c) => <col key={c.key} style={{ width: c.width }} />)}
@@ -307,7 +307,7 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
                 const sticky = stickyCellProps(c);
                 if (singleLine && !c.noTruncate) {
                   return (
-                    <td key={c.key} {...sticky} className={`py-2.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""} ${sticky.className || ""}`}>
+                    <td key={c.key} {...sticky} className={`py-1.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""} ${sticky.className || ""}`}>
                       <span
                         className="block overflow-hidden text-ellipsis whitespace-nowrap"
                         style={c.fixedWidth ? { width: c.fixedWidth, maxWidth: c.fixedWidth } : { maxWidth: c.maxWidth || 200 }}
@@ -322,7 +322,7 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
                   <td
                     key={c.key}
                     {...sticky}
-                    className={`py-2.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""} ${hasWidths && !c.noTruncate ? "truncate" : ""} ${sticky.className || ""}`}
+                    className={`py-1.5 px-3 align-middle ${c.align === "right" ? "text-right" : ""} ${hasWidths && !c.noTruncate ? "truncate" : ""} ${sticky.className || ""}`}
                     title={hasWidths && !c.noTruncate && typeof row[c.key] === "string" ? row[c.key] : undefined}
                   >
                     {cellContent}
