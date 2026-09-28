@@ -164,7 +164,7 @@ export default function EmployeeReviewSummary({ detail, onPreviewDocument }) {
             <Field label="Badge Number" value={drivingLicence.badge_number} />
             <Field label="Vehicle Class" value={drivingLicence.vehicle_class} />
             <Field label="Issuing Authority" value={drivingLicence.issuing_authority} />
-            <Field label="Issue Date" value={formatDate(drivingLicence.issue_date)} />
+            <Field label="HMV Issue Date" value={formatDate(drivingLicence.issue_date)} />
             <Field label="Expiry Date" value={formatDate(drivingLicence.expiry_date)} />
           </div>
         </>

@@ -944,7 +944,7 @@ export default function EmployeeWizard() {
               <Input label="Badge Number" value={drivingLicence.badge_number || ""} onChange={(e) => setDrivingLicence({ ...drivingLicence, badge_number: e.target.value })} />
               <Input label="Vehicle Class" value={drivingLicence.vehicle_class || ""} onChange={(e) => setDrivingLicence({ ...drivingLicence, vehicle_class: e.target.value })} placeholder="e.g. LMV, HMV" />
               <Input label="Issuing Authority" value={drivingLicence.issuing_authority || ""} onChange={(e) => setDrivingLicence({ ...drivingLicence, issuing_authority: e.target.value })} />
-              <Input label="Issue Date" type="date" value={drivingLicence.issue_date || ""} onChange={(e) => setDrivingLicence({ ...drivingLicence, issue_date: e.target.value })} />
+              <Input label="HMV Issue Date" type="date" value={drivingLicence.issue_date || ""} onChange={(e) => setDrivingLicence({ ...drivingLicence, issue_date: e.target.value })} />
               <Input label="Expiry Date" type="date" value={drivingLicence.expiry_date || ""} onChange={(e) => setDrivingLicence({ ...drivingLicence, expiry_date: e.target.value })} />
             </div>
           </div>
@@ -1123,7 +1123,7 @@ export default function EmployeeWizard() {
                   <Field label="Badge Number" value={drivingLicence.badge_number} />
                   <Field label="Vehicle Class" value={drivingLicence.vehicle_class} />
                   <Field label="Issuing Authority" value={drivingLicence.issuing_authority} />
-                  <Field label="Issue Date" value={formatDate(drivingLicence.issue_date)} />
+                  <Field label="HMV Issue Date" value={formatDate(drivingLicence.issue_date)} />
                   <Field label="Expiry Date" value={formatDate(drivingLicence.expiry_date)} />
                 </div>
               </>

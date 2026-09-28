@@ -556,7 +556,7 @@ export default function CandidateDetail() {
                   <Field label="Badge Number" value={candidate.dl_badge_number} />
                   <Field label="Vehicle Class" value={candidate.dl_vehicle_class} />
                   <Field label="Issuing Authority" value={candidate.dl_issuing_authority} />
-                  <Field label="Issue Date" value={formatDate(candidate.dl_issue_date)} />
+                  <Field label="HMV Issue Date" value={formatDate(candidate.dl_issue_date)} />
                   <Field label="Expiry Date" value={formatDate(candidate.dl_expiry_date)} />
                 </div>
               </>
@@ -816,7 +816,7 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
             <Input label="Badge Number" value={form.dl_badge_number} onChange={set("dl_badge_number")} />
             <Input label="Vehicle Class" value={form.dl_vehicle_class} onChange={set("dl_vehicle_class")} />
             <Input label="Issuing Authority" value={form.dl_issuing_authority} onChange={set("dl_issuing_authority")} />
-            <Input type="date" label="Issue Date" value={form.dl_issue_date} onChange={set("dl_issue_date")} />
+            <Input type="date" label="HMV Issue Date" value={form.dl_issue_date} onChange={set("dl_issue_date")} />
             <Input type="date" label="Expiry Date" value={form.dl_expiry_date} onChange={set("dl_expiry_date")} />
           </div>
         </>
