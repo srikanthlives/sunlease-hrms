@@ -26,6 +26,7 @@ from app.services import (
     audit_service, employee_service, approval_service, permission_service,
     document_service, licence_service, bulk_import_service, transfer_service, payroll_service,
 )
+from app.services.storage import get_storage
 
 router = APIRouter(prefix="/api/v1/employees", tags=["employees"], dependencies=[Depends(get_current_user)])
 
@@ -535,10 +536,9 @@ def upload_photo(episode_id: int, file: UploadFile = File(...), db: Session = De
 def get_photo(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _get_episode(db, episode_id)
     _check_scope(db, user, episode)
-    path = document_service.resolve_employee_photo_path(episode.employee)
-    if not path or not os.path.exists(path):
+    if not episode.employee.photo_object_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No photo uploaded")
-    return FileResponse(path)
+    return document_service.serve_object(episode.employee.photo_object_key)
 
 
 @router.get("/{episode_id}/required-documents", dependencies=[Depends(require_permission(Permission.EMPLOYEE_DOCUMENTS_VIEW))])
@@ -591,24 +591,21 @@ def download_document(episode_id: int, document_id: int, db: Session = Depends(g
     document = db.query(DocumentMeta).filter(DocumentMeta.id == document_id, DocumentMeta.episode_id == episode.id).first()
     if not document:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
-    path = document_service.resolve_file_path(document)
-    return FileResponse(path, filename=document.file_name, media_type=document.mime_type)
+    return document_service.serve_object(document.object_key, media_type=document.mime_type, download_name=document.file_name)
 
 
 @router.get("/{episode_id}/documents/{document_id}/preview", dependencies=[Depends(require_permission(Permission.EMPLOYEE_DOCUMENTS_VIEW))])
 def preview_document(episode_id: int, document_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """Same file as /download but WITHOUT the `filename` kwarg to
-    FileResponse - Starlette only sets Content-Disposition: attachment
-    when a filename is given, so omitting it (mirrors the photo endpoint's
-    plain FileResponse(path) pattern above) lets the browser render the
-    file inline (e.g. in an <iframe>/<img>) instead of force-downloading."""
+    """Same file as /download but without `download_name` -
+    document_service.serve_object only sets Content-Disposition: attachment
+    when one is given, so omitting it lets the browser render the file
+    inline (e.g. in an <iframe>/<img>) instead of force-downloading."""
     episode = _get_episode(db, episode_id)
     _check_scope(db, user, episode)
     document = db.query(DocumentMeta).filter(DocumentMeta.id == document_id, DocumentMeta.episode_id == episode.id).first()
     if not document:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
-    path = document_service.resolve_file_path(document)
-    return FileResponse(path, media_type=document.mime_type)
+    return document_service.serve_object(document.object_key, media_type=document.mime_type)
 
 
 @router.delete("/{episode_id}/documents/{document_id}", dependencies=[Depends(require_permission(Permission.EMPLOYEE_DOCUMENTS_UPLOAD))])
@@ -618,9 +615,8 @@ def delete_document(episode_id: int, document_id: int, db: Session = Depends(get
     document = db.query(DocumentMeta).filter(DocumentMeta.id == document_id, DocumentMeta.episode_id == episode.id).first()
     if not document:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
-    path = document_service.resolve_file_path(document)
-    if os.path.exists(path):
-        os.remove(path)
+    if document.object_key:
+        get_storage().delete(document.object_key)
     db.delete(document)
     audit_service.record(db, "DOCUMENT", episode.id, AuditAction.UPDATE, user, old_value=f"removed document {document_id}")
     db.commit()
@@ -1012,10 +1008,7 @@ def preview_document_change(request_id: int, which: str, db: Session = Depends(g
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "which must be 'old' or 'new'")
 
-    path = os.path.join(settings.UPLOAD_DIR, object_key)
-    if not os.path.exists(path):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
-    return FileResponse(path, filename=file_name)
+    return document_service.serve_object(object_key, download_name=file_name)
 
 
 @router.post("-change-requests/{request_id}/approve")

@@ -5,13 +5,13 @@ import re
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.enums import AuditAction, TransactionType
 from app.models.models import (
     LeaveType, LeaveEligibilityRule, LeaveBalance, LeaveApplication,
     RosterEntry, EmploymentEpisode, User,
 )
 from app.services import audit_service, approval_service, document_service
+from app.services.storage import get_storage
 
 
 def _slug(value: str) -> str:
@@ -26,24 +26,20 @@ def save_attachment(db: Session, application: LeaveApplication, upload_file: Upl
     leave attachments aren't a DocumentType/DocumentMeta (they're
     per-application, not per-episode-per-type)."""
     ext = os.path.splitext(upload_file.filename or "")[1]
-    target_dir = os.path.join(document_service._employee_upload_dir(db, application.episode), "leave-attachments")
-    os.makedirs(target_dir, exist_ok=True)
     stored_name = f"{application.id}-{_slug(os.path.splitext(upload_file.filename or '')[0])}{ext}"
-    full_path = os.path.join(target_dir, stored_name)
+    object_key = os.path.join(document_service._employee_upload_dir(db, application.episode), "leave-attachments", stored_name)
 
     content = upload_file.file.read()
-    with open(full_path, "wb") as f:
-        f.write(content)
+    get_storage().save(object_key, content)
 
-    application.attachment_object_key = os.path.relpath(full_path, settings.UPLOAD_DIR)
+    application.attachment_object_key = object_key
     application.attachment_file_name = upload_file.filename
     db.add(application)
     audit_service.record(db, "LEAVE_APPLICATION", application.id, AuditAction.UPDATE, actor, new_value="attachment uploaded")
     return application
 
 
-def attachment_path(application: LeaveApplication) -> str:
-    return os.path.join(settings.UPLOAD_DIR, application.attachment_object_key)
+
 
 
 def find_eligibility_rule(db: Session, leave_type_id: int, episode: EmploymentEpisode) -> LeaveEligibilityRule | None:

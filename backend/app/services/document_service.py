@@ -2,15 +2,15 @@ import os
 import re
 from uuid import uuid4
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.models import (
     Candidate, CandidateDocument, DocumentMeta, DocumentRequirement, DocumentType,
     EmploymentEpisode, User,
 )
 from app.services import approval_service
+from app.services.storage import get_storage
 
 
 def _slug(value: str) -> str:
@@ -99,7 +99,8 @@ def resolve_required_documents_for_candidate(db: Session, candidate: Candidate) 
 
 
 def _candidate_upload_dir(candidate: Candidate) -> str:
-    return os.path.join(settings.UPLOAD_DIR, "candidates", candidate.reference_number or f"id-{candidate.id}")
+    """Relative key prefix (not a local path - see services/storage.py)."""
+    return os.path.join("candidates", candidate.reference_number or f"id-{candidate.id}")
 
 
 def save_candidate_document(db: Session, candidate: Candidate, document_type_id: int, upload_file: UploadFile, actor: User) -> CandidateDocument:
@@ -108,16 +109,11 @@ def save_candidate_document(db: Session, candidate: Candidate, document_type_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown document type")
 
     ext = os.path.splitext(upload_file.filename or "")[1]
-    target_dir = _candidate_upload_dir(candidate)
-    os.makedirs(target_dir, exist_ok=True)
     stored_name = f"{_slug(doc_type.name)}{ext}"
-    full_path = os.path.join(target_dir, stored_name)
+    object_key = os.path.join(_candidate_upload_dir(candidate), stored_name)
 
     content = upload_file.file.read()
-    with open(full_path, "wb") as f:
-        f.write(content)
-
-    object_key = os.path.relpath(full_path, settings.UPLOAD_DIR)
+    get_storage().save(object_key, content)
 
     record = db.query(CandidateDocument).filter(
         CandidateDocument.candidate_id == candidate.id, CandidateDocument.document_type_id == document_type_id,
@@ -144,9 +140,7 @@ def delete_candidate_document(db: Session, document: CandidateDocument) -> None:
     it. Used for both a direct (pre-approval) delete and an approved
     CandidateChangeRequest's DOCUMENT_DELETE."""
     if document.object_key:
-        path = os.path.join(settings.UPLOAD_DIR, document.object_key)
-        if os.path.exists(path):
-            os.remove(path)
+        get_storage().delete(document.object_key)
     db.delete(document)
 
 
@@ -155,25 +149,21 @@ def copy_candidate_documents_to_episode(db: Session, candidate: Candidate, episo
     into a DocumentMeta row for the new episode, physically copying the
     file into the employee's own upload directory - the candidate never
     has to re-submit anything HR already collected during recruitment."""
+    storage = get_storage()
     for cand_doc in candidate.documents:
-        if not cand_doc.object_key:
-            continue
-        src_path = os.path.join(settings.UPLOAD_DIR, cand_doc.object_key)
-        if not os.path.exists(src_path):
+        if not cand_doc.object_key or not storage.exists(cand_doc.object_key):
             continue
 
+        content = storage.read(cand_doc.object_key)
         ext = os.path.splitext(cand_doc.file_name or "")[1]
-        target_dir = _employee_upload_dir(db, episode)
-        os.makedirs(target_dir, exist_ok=True)
         stored_name = f"{_slug(cand_doc.document_type)}{ext}"
-        full_path = os.path.join(target_dir, stored_name)
-        with open(src_path, "rb") as src, open(full_path, "wb") as dst:
-            dst.write(src.read())
+        object_key = os.path.join(_employee_upload_dir(db, episode), stored_name)
+        storage.save(object_key, content)
 
         record = DocumentMeta(
             episode_id=episode.id, document_type_id=cand_doc.document_type_id,
             document_type=cand_doc.document_type, file_name=cand_doc.file_name,
-            object_key=os.path.relpath(full_path, settings.UPLOAD_DIR),
+            object_key=object_key,
             file_size=cand_doc.file_size, mime_type=cand_doc.mime_type,
             uploaded_by_id=actor.id,
         )
@@ -181,6 +171,7 @@ def copy_candidate_documents_to_episode(db: Session, candidate: Candidate, episo
 
 
 def _employee_upload_dir(db: Session, episode: EmploymentEpisode) -> str:
+    """Relative key prefix (not a local path - see services/storage.py)."""
     company_name = "Unassigned"
     cc_id = approval_service.current_cost_center_id(db, episode.id)
     if cc_id:
@@ -188,7 +179,7 @@ def _employee_upload_dir(db: Session, episode: EmploymentEpisode) -> str:
         cc = db.query(CostCenter).filter(CostCenter.id == cc_id).first()
         if cc and cc.company:
             company_name = cc.company.name
-    base = os.path.join(settings.UPLOAD_DIR, _slug(company_name), episode.employee_number)
+    base = os.path.join(_slug(company_name), episode.employee_number)
     # A rejoin stint keeps the same employee number, so give it its own folder -
     # same-named documents must not overwrite the earlier stint's files.
     return os.path.join(base, f"rejoin-{episode.id}") if episode.previous_episode_id else base
@@ -200,16 +191,11 @@ def save_upload(db: Session, episode: EmploymentEpisode, document_type_id: int, 
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown document type")
 
     ext = os.path.splitext(upload_file.filename or "")[1]
-    target_dir = _employee_upload_dir(db, episode)
-    os.makedirs(target_dir, exist_ok=True)
     stored_name = f"{_slug(doc_type.name)}{ext}"
-    full_path = os.path.join(target_dir, stored_name)
+    object_key = os.path.join(_employee_upload_dir(db, episode), stored_name)
 
     content = upload_file.file.read()
-    with open(full_path, "wb") as f:
-        f.write(content)
-
-    object_key = os.path.relpath(full_path, settings.UPLOAD_DIR)
+    get_storage().save(object_key, content)
 
     record = db.query(DocumentMeta).filter(
         DocumentMeta.episode_id == episode.id, DocumentMeta.document_type_id == document_type_id,
@@ -230,8 +216,19 @@ def save_upload(db: Session, episode: EmploymentEpisode, document_type_id: int, 
     return record
 
 
-def resolve_file_path(document: DocumentMeta) -> str:
-    return os.path.join(settings.UPLOAD_DIR, document.object_key)
+def read_object(object_key: str) -> bytes:
+    return get_storage().read(object_key)
+
+
+def serve_object(object_key: str, media_type: str | None = None, download_name: str | None = None) -> Response:
+    """Returns the stored file as a response - works the same whether the
+    configured backend is local disk or R2 (unlike the old FileResponse(path)
+    pattern, which only ever worked for a local path). Pass `download_name`
+    to force a download (Content-Disposition: attachment); omit it to let
+    the browser render the file inline (preview) per `media_type`."""
+    content = get_storage().read(object_key)
+    headers = {"Content-Disposition": f'attachment; filename="{download_name}"'} if download_name else {}
+    return Response(content=content, media_type=media_type or "application/octet-stream", headers=headers)
 
 
 def stage_replacement(db: Session, episode: EmploymentEpisode, document_type_id: int, upload_file: UploadFile) -> dict:
@@ -246,18 +243,15 @@ def stage_replacement(db: Session, episode: EmploymentEpisode, document_type_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown document type")
 
     ext = os.path.splitext(upload_file.filename or "")[1]
-    target_dir = _employee_upload_dir(db, episode)
-    os.makedirs(target_dir, exist_ok=True)
     stored_name = f"{_slug(doc_type.name)}-pending-{uuid4().hex[:8]}{ext}"
-    full_path = os.path.join(target_dir, stored_name)
+    object_key = os.path.join(_employee_upload_dir(db, episode), stored_name)
 
     content = upload_file.file.read()
-    with open(full_path, "wb") as f:
-        f.write(content)
+    get_storage().save(object_key, content)
 
     return {
         "document_type_id": document_type_id,
-        "new_object_key": os.path.relpath(full_path, settings.UPLOAD_DIR),
+        "new_object_key": object_key,
         "new_file_name": upload_file.filename,
         "new_file_size": len(content),
         "new_mime_type": upload_file.content_type,
@@ -266,10 +260,9 @@ def stage_replacement(db: Session, episode: EmploymentEpisode, document_type_id:
 
 def apply_staged_replacement(db: Session, record: DocumentMeta, staged: dict) -> None:
     """Approval-time: swap the record over to the staged file and delete
-    the old one - old and new never coexist on disk past this point."""
-    old_path = resolve_file_path(record)
-    if os.path.exists(old_path):
-        os.remove(old_path)
+    the old one - old and new never coexist past this point."""
+    if record.object_key:
+        get_storage().delete(record.object_key)
     record.file_name = staged["new_file_name"]
     record.object_key = staged["new_object_key"]
     record.file_size = staged["new_file_size"]
@@ -282,9 +275,7 @@ def apply_staged_replacement(db: Session, record: DocumentMeta, staged: dict) ->
 def discard_staged_replacement(staged: dict) -> None:
     """Rejection-time: drop the staged file: the old document stays as
     the document of record."""
-    path = os.path.join(settings.UPLOAD_DIR, staged["new_object_key"])
-    if os.path.exists(path):
-        os.remove(path)
+    get_storage().delete(staged["new_object_key"])
 
 
 def save_employee_photo(db: Session, episode: EmploymentEpisode, upload_file: UploadFile) -> str:
@@ -293,21 +284,12 @@ def save_employee_photo(db: Session, episode: EmploymentEpisode, upload_file: Up
     documents (company/employee-number folder, renamed to "photo") but
     tracked on Employee.photo_object_key rather than a DocumentMeta row."""
     ext = os.path.splitext(upload_file.filename or "")[1] or ".jpg"
-    target_dir = _employee_upload_dir(db, episode)
-    os.makedirs(target_dir, exist_ok=True)
-    full_path = os.path.join(target_dir, f"photo{ext}")
+    object_key = os.path.join(_employee_upload_dir(db, episode), f"photo{ext}")
 
     content = upload_file.file.read()
-    with open(full_path, "wb") as f:
-        f.write(content)
+    get_storage().save(object_key, content)
 
     employee = episode.employee
-    employee.photo_object_key = os.path.relpath(full_path, settings.UPLOAD_DIR)
+    employee.photo_object_key = object_key
     db.add(employee)
     return employee.photo_object_key
-
-
-def resolve_employee_photo_path(employee) -> str | None:
-    if not employee.photo_object_key:
-        return None
-    return os.path.join(settings.UPLOAD_DIR, employee.photo_object_key)

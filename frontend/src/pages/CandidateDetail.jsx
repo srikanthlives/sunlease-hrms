@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Paperclip, Upload, Download, Trash2 } from "lucide-react";
+import { Paperclip, Upload, Download, Trash2, RefreshCw } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -604,24 +604,32 @@ export default function CandidateDetail() {
                 {d.uploaded && (
                   <>
                     <Button
-                      variant="outline" size="sm"
+                      variant="outline" size="sm" className="!p-1.5" title="Preview" aria-label="Preview"
                       onClick={() => setPreviewDoc({ id: d.document_id, file_name: d.file_name, document_type: d.document_type_name })}
                     >
-                      Preview
+                      <Paperclip size={14} />
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => downloadDocument(d.document_id, d.file_name)}>Download</Button>
+                    <Button variant="outline" size="sm" className="!p-1.5" title="Download" aria-label="Download" onClick={() => downloadDocument(d.document_id, d.file_name)}>
+                      <Download size={14} />
+                    </Button>
                     {!isTerminal && (
-                      <Button variant="danger" size="sm" onClick={() => removeDocument(d.document_id)}>
-                        {isApproved ? "Request Deletion" : "Remove"}
+                      <Button
+                        variant="danger" size="sm" className="!p-1.5"
+                        title={isApproved ? "Request Deletion" : "Remove"} aria-label={isApproved ? "Request Deletion" : "Remove"}
+                        onClick={() => removeDocument(d.document_id)}
+                      >
+                        <Trash2 size={14} />
                       </Button>
                     )}
                   </>
                 )}
                 {!isTerminal && (
-                  <label className="text-xs">
-                    <span className={`inline-block px-3 py-1.5 rounded-md border border-ink/15 cursor-pointer hover:bg-ink/5 ${docUploadingId === d.document_type_id ? "opacity-50 pointer-events-none" : ""}`}>
-                      {docUploadingId === d.document_type_id ? "Uploading…" : d.uploaded ? "Replace" : "Upload"}
-                    </span>
+                  <label
+                    className={`inline-flex items-center justify-center !p-1.5 h-8 w-8 rounded-md border border-ink/15 cursor-pointer hover:bg-ink/5 ${docUploadingId === d.document_type_id ? "opacity-50 pointer-events-none" : ""}`}
+                    title={d.uploaded ? "Replace" : "Upload"}
+                    aria-label={d.uploaded ? "Replace" : "Upload"}
+                  >
+                    {d.uploaded ? <RefreshCw size={14} /> : <Upload size={14} />}
                     <input type="file" className="hidden" onChange={(e) => uploadDocument(d.document_type_id, e.target.files[0])} />
                   </label>
                 )}

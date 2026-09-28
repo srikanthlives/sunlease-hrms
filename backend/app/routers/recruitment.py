@@ -18,6 +18,7 @@ from app.schemas.recruitment import (
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
 from app.services import audit_service, candidate_bulk_import_service, document_service, employee_service, licence_service, permission_service, recruitment_service
+from app.services.storage import get_storage
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
 
@@ -428,9 +429,7 @@ def delete_candidate(candidate_id: int, db: Session = Depends(get_db), user: Use
         document_service.delete_candidate_document(db, doc)
     for result in list(candidate.stage_results):
         if result.attachment_object_key:
-            path = recruitment_service.stage_result_attachment_path(result)
-            if os.path.exists(path):
-                os.remove(path)
+            get_storage().delete(result.attachment_object_key)
     db.query(CandidateChangeRequest).filter(CandidateChangeRequest.candidate_id == candidate.id).delete(synchronize_session=False)
     reference = candidate.reference_number
     db.delete(candidate)  # stage results cascade with the candidate
@@ -479,14 +478,14 @@ def _get_stage_result_with_attachment(db: Session, candidate: Candidate, criteri
 def download_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db)):
     candidate = _get_candidate(db, candidate_id)
     stage_result = _get_stage_result_with_attachment(db, candidate, criteria_id)
-    return FileResponse(recruitment_service.stage_result_attachment_path(stage_result), filename=stage_result.attachment_file_name, media_type=stage_result.attachment_mime_type)
+    return document_service.serve_object(stage_result.attachment_object_key, media_type=stage_result.attachment_mime_type, download_name=stage_result.attachment_file_name)
 
 
 @router.get("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment/preview", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
 def preview_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db)):
     candidate = _get_candidate(db, candidate_id)
     stage_result = _get_stage_result_with_attachment(db, candidate, criteria_id)
-    return FileResponse(recruitment_service.stage_result_attachment_path(stage_result), media_type=stage_result.attachment_mime_type)
+    return document_service.serve_object(stage_result.attachment_object_key, media_type=stage_result.attachment_mime_type)
 
 
 @router.delete("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
@@ -548,14 +547,14 @@ def upload_candidate_document(
 def preview_candidate_document(candidate_id: int, document_id: int, db: Session = Depends(get_db)):
     candidate = _get_candidate(db, candidate_id)
     doc = _get_candidate_document(db, candidate, document_id)
-    return FileResponse(document_service.resolve_file_path(doc), media_type=doc.mime_type)
+    return document_service.serve_object(doc.object_key, media_type=doc.mime_type)
 
 
 @router.get("/candidates/{candidate_id}/documents/{document_id}/download", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
 def download_candidate_document(candidate_id: int, document_id: int, db: Session = Depends(get_db)):
     candidate = _get_candidate(db, candidate_id)
     doc = _get_candidate_document(db, candidate, document_id)
-    return FileResponse(document_service.resolve_file_path(doc), filename=doc.file_name, media_type=doc.mime_type)
+    return document_service.serve_object(doc.object_key, media_type=doc.mime_type, download_name=doc.file_name)
 
 
 @router.delete("/candidates/{candidate_id}/documents/{document_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

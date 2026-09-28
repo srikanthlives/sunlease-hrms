@@ -12,6 +12,22 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: str = os.environ.get("HRMS_UPLOAD_DIR", "../data/hrms-attachments")
 
+    # Storage backend for uploaded files (documents, photos, leave/proof
+    # attachments) - "local" (default) or "r2" (Cloudflare R2, S3-compatible).
+    # Ported from sunlease-expms's app/services/storage.py; HRMS keeps its
+    # own existing object_key path scheme (see document_service.py) rather
+    # than expms's date-bucketed layout - only the backend itself (local
+    # disk vs R2) is swappable. See services/storage.py.
+    STORAGE_TYPE: str = os.environ.get("HRMS_STORAGE_TYPE", "local")
+    R2_ACCOUNT_ID: str = os.environ.get("HRMS_R2_ACCOUNT_ID", "")
+    R2_ACCESS_KEY_ID: str = os.environ.get("HRMS_R2_ACCESS_KEY_ID", "")
+    R2_SECRET_ACCESS_KEY: str = os.environ.get("HRMS_R2_SECRET_ACCESS_KEY", "")
+    R2_BUCKET_NAME: str = os.environ.get("HRMS_R2_BUCKET_NAME", "")
+    # Optional override - set this instead of R2_ACCOUNT_ID if you're using a
+    # custom/non-standard endpoint; otherwise it's derived from the account id.
+    R2_ENDPOINT_URL: str = os.environ.get("HRMS_R2_ENDPOINT_URL", "")
+    R2_PREFIX: str = os.environ.get("HRMS_R2_PREFIX", "HRMS")
+
     _cors_origins = os.environ.get("HRMS_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     CORS_ORIGINS: ClassVar[list] = [origin.strip() for origin in _cors_origins.split(",")]
 

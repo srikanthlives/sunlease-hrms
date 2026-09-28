@@ -9,6 +9,15 @@ services:
       HRMS_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
       HRMS_UPLOAD_DIR: /data/hrms-attachments
 
+      # Upload storage backend - see .env / .env.example for what each does.
+      HRMS_STORAGE_TYPE: "${HRMS_STORAGE_TYPE:-local}"
+      HRMS_R2_ACCOUNT_ID: "${HRMS_R2_ACCOUNT_ID:-}"
+      HRMS_R2_ACCESS_KEY_ID: "${HRMS_R2_ACCESS_KEY_ID:-}"
+      HRMS_R2_SECRET_ACCESS_KEY: "${HRMS_R2_SECRET_ACCESS_KEY:-}"
+      HRMS_R2_BUCKET_NAME: "${HRMS_R2_BUCKET_NAME:-}"
+      HRMS_R2_ENDPOINT_URL: "${HRMS_R2_ENDPOINT_URL:-}"
+      HRMS_R2_PREFIX: "${HRMS_R2_PREFIX:-HRMS}"
+
       # Outbound email - see .env / .env.example for what each does.
       HRMS_SMTP_HOST: "${HRMS_SMTP_HOST:-}"
       HRMS_SMTP_PORT: "${HRMS_SMTP_PORT:-587}"

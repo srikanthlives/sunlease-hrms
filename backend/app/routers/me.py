@@ -1,7 +1,6 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
@@ -56,16 +55,14 @@ def _my_document(db: Session, episode: EmploymentEpisode, document_id: int) -> D
 def my_document_preview(document_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _my_episode(db, user)
     document = _my_document(db, episode, document_id)
-    path = document_service.resolve_file_path(document)
-    return FileResponse(path, media_type=document.mime_type)
+    return document_service.serve_object(document.object_key, media_type=document.mime_type)
 
 
 @router.get("/documents/{document_id}/download")
 def my_document_download(document_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     episode = _my_episode(db, user)
     document = _my_document(db, episode, document_id)
-    path = document_service.resolve_file_path(document)
-    return FileResponse(path, filename=document.file_name, media_type=document.mime_type)
+    return document_service.serve_object(document.object_key, media_type=document.mime_type, download_name=document.file_name)
 
 
 @router.get("/leave/balances")
@@ -145,7 +142,7 @@ def my_download_leave_attachment(application_id: int, db: Session = Depends(get_
     application = _my_application(db, episode, application_id)
     if not application.attachment_object_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No attachment uploaded for this application")
-    return FileResponse(leave_service.attachment_path(application), filename=application.attachment_file_name)
+    return document_service.serve_object(application.attachment_object_key, download_name=application.attachment_file_name)
 
 
 @router.get("/attendance/records")

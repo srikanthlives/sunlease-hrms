@@ -276,15 +276,14 @@ def check_number_available(db: Session, number: str, employee_id: int, cost_cent
 def purge_draft_episode(db: Session, episode: EmploymentEpisode) -> None:
     """Hard-deletes a DRAFT stint and everything hanging off it (its Employee
     row too if it was that person's only stint). Caller commits."""
-    from app.services import document_service  # local: avoids an import cycle
+    from app.services.storage import get_storage  # local: avoids an import cycle
 
     for document in db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).all():
-        try:
-            path = document_service.resolve_file_path(document)
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
+        if document.object_key:
+            try:
+                get_storage().delete(document.object_key)
+            except Exception:
+                pass
     db.query(DocumentMeta).filter(DocumentMeta.episode_id == episode.id).delete(synchronize_session=False)
     for model in (OrgAssignment, CostAllocation, StatutoryInfo, BankAccount, Dependent, Nominee, DrivingLicenceDetail):
         db.query(model).filter(model.episode_id == episode.id).delete(synchronize_session=False)

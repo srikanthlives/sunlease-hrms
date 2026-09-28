@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, SectionDivider, StatusBadge, formatAadhaar, formatDate } from "../components/ui";
+import { Download, Trash2, Upload, RefreshCw } from "lucide-react";
 
 // Driving Licence is inserted before Review & Submit only when a
 // DrivingLicenceRequirement rule matches this employee's Employee Type/
@@ -797,14 +798,20 @@ export default function EmployeeWizard() {
                   <div className="flex items-center gap-2">
                     {d.uploaded && (
                       <>
-                        <Button variant="outline" size="sm" onClick={() => downloadDocument(d.document_meta_id, d.file_name)}>Download</Button>
-                        <Button variant="danger" size="sm" onClick={() => removeDocument(d.document_meta_id)}>Remove</Button>
+                        <Button variant="outline" size="sm" className="!p-1.5" title="Download" aria-label="Download" onClick={() => downloadDocument(d.document_meta_id, d.file_name)}>
+                          <Download size={14} />
+                        </Button>
+                        <Button variant="danger" size="sm" className="!p-1.5" title="Remove" aria-label="Remove" onClick={() => removeDocument(d.document_meta_id)}>
+                          <Trash2 size={14} />
+                        </Button>
                       </>
                     )}
-                    <label className="text-xs">
-                      <span className={`inline-block px-3 py-1.5 rounded-md border border-ink/15 cursor-pointer hover:bg-ink/5 ${docUploadingId === d.document_type_id ? "opacity-50 pointer-events-none" : ""}`}>
-                        {docUploadingId === d.document_type_id ? "Uploading…" : d.uploaded ? "Replace" : "Upload"}
-                      </span>
+                    <label
+                      className={`inline-flex items-center justify-center !p-1.5 h-8 w-8 rounded-md border border-ink/15 cursor-pointer hover:bg-ink/5 ${docUploadingId === d.document_type_id ? "opacity-50 pointer-events-none" : ""}`}
+                      title={d.uploaded ? "Replace" : "Upload"}
+                      aria-label={d.uploaded ? "Replace" : "Upload"}
+                    >
+                      {d.uploaded ? <RefreshCw size={14} /> : <Upload size={14} />}
                       <input
                         type="file"
                         className="hidden"

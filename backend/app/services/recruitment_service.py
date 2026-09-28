@@ -6,13 +6,13 @@ import re
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.enums import AuditAction, CandidateStatus, RoleName, TransactionType
 from app.models.models import (
     Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
     DesignationCriteria, DrivingLicenceDetail, Employee, EmploymentEpisode, SelectionCriteria, User,
 )
 from app.services import approval_service, audit_service, document_service, employee_service
+from app.services.storage import get_storage
 
 
 def _slug(value: str) -> str:
@@ -387,16 +387,13 @@ def save_stage_result_attachment(db: Session, stage_result: CandidateStageResult
     leave_service.save_attachment."""
     candidate = stage_result.candidate
     ext = os.path.splitext(upload_file.filename or "")[1]
-    target_dir = os.path.join(document_service._candidate_upload_dir(candidate), "criteria-proofs")
-    os.makedirs(target_dir, exist_ok=True)
     stored_name = f"{stage_result.criteria_id}-{_slug(os.path.splitext(upload_file.filename or '')[0])}{ext}"
-    full_path = os.path.join(target_dir, stored_name)
+    object_key = os.path.join(document_service._candidate_upload_dir(candidate), "criteria-proofs", stored_name)
 
     content = upload_file.file.read()
-    with open(full_path, "wb") as f:
-        f.write(content)
+    get_storage().save(object_key, content)
 
-    stage_result.attachment_object_key = os.path.relpath(full_path, settings.UPLOAD_DIR)
+    stage_result.attachment_object_key = object_key
     stage_result.attachment_file_name = upload_file.filename
     stage_result.attachment_mime_type = upload_file.content_type
     db.add(stage_result)
@@ -411,18 +408,12 @@ def delete_stage_result_attachment(db: Session, stage_result: CandidateStageResu
     (PASS/FAIL/EXCEPTION, tested_on, remarks) is untouched - only the
     attachment goes."""
     if stage_result.attachment_object_key:
-        path = stage_result_attachment_path(stage_result)
-        if os.path.exists(path):
-            os.remove(path)
+        get_storage().delete(stage_result.attachment_object_key)
     stage_result.attachment_object_key = None
     stage_result.attachment_file_name = None
     stage_result.attachment_mime_type = None
     db.add(stage_result)
     audit_service.record(db, "CANDIDATE_STAGE_RESULT", stage_result.id, AuditAction.UPDATE, actor, old_value=f"attachment removed for criteria {stage_result.criteria_id}")
-
-
-def stage_result_attachment_path(stage_result: CandidateStageResult) -> str:
-    return os.path.join(settings.UPLOAD_DIR, stage_result.attachment_object_key)
 
 
 def record_stage_result(db: Session, candidate: Candidate, criteria_id: int, result: str, tested_on, remarks: str | None, user: User) -> CandidateStageResult:

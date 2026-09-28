@@ -2,7 +2,6 @@ import calendar
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_permission
@@ -14,7 +13,7 @@ from app.models.models import (
 from app.schemas.leave import (
     LeaveTypeIn, LeaveEligibilityRuleIn, HolidayCalendarIn, LeaveApplicationIn, LeaveApplicationReview,
 )
-from app.services import audit_service, employee_service, leave_service, approval_service, permission_service
+from app.services import audit_service, document_service, employee_service, leave_service, approval_service, permission_service
 
 router = APIRouter(prefix="/api/v1/leave", tags=["leave"], dependencies=[Depends(get_current_user)])
 
@@ -269,7 +268,7 @@ def download_application_attachment(application_id: int, db: Session = Depends(g
     _check_scope(db, user, episode)
     if not application.attachment_object_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No attachment uploaded for this application")
-    return FileResponse(leave_service.attachment_path(application), filename=application.attachment_file_name)
+    return document_service.serve_object(application.attachment_object_key, download_name=application.attachment_file_name)
 
 
 @router.get("/history/{episode_id}", dependencies=[Depends(require_permission(Permission.ATTENDANCE_VIEW))])
