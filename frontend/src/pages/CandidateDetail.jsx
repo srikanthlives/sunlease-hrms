@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Paperclip, Upload } from "lucide-react";
+import { Paperclip, Upload, Download, Trash2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -45,6 +45,7 @@ export default function CandidateDetail() {
   const [docUploadingId, setDocUploadingId] = useState(null);
   const [docError, setDocError] = useState("");
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [previewProof, setPreviewProof] = useState(null);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [testedOnByCriteria, setTestedOnByCriteria] = useState({});
@@ -110,6 +111,17 @@ export default function CandidateDetail() {
       const form = new FormData();
       form.append("file", file);
       await client.post(`/recruitment/candidates/${candidateId}/stage-results/${criteriaId}/attachment`, form);
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
+  }
+
+  async function deleteProof(criteriaId) {
+    if (!window.confirm("Remove this proof document? The recorded result (Pass/Fail/Exception) is kept.")) return;
+    setError("");
+    try {
+      await client.delete(`/recruitment/candidates/${candidateId}/stage-results/${criteriaId}/attachment`);
       reload();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -353,6 +365,8 @@ export default function CandidateDetail() {
           fileName={r.attachment_file_name}
           onUpload={(file) => uploadProof(r.criteria_id, file)}
           onDownload={() => downloadProof(r.criteria_id, r.attachment_file_name)}
+          onPreview={() => setPreviewProof({ criteria_id: r.criteria_id, id: r.criteria_id, file_name: r.attachment_file_name, mime_type: r.attachment_mime_type })}
+          onDelete={canRecordCriteria ? () => deleteProof(r.criteria_id) : null}
         />
       ),
     },
@@ -616,6 +630,14 @@ export default function CandidateDetail() {
           ))}
         </div>
       </Card>
+      {previewProof && (
+        <DocumentPreviewModal
+          document={previewProof}
+          previewUrl={`/recruitment/candidates/${candidateId}/stage-results/${previewProof.criteria_id}/attachment/preview`}
+          downloadUrl={`/recruitment/candidates/${candidateId}/stage-results/${previewProof.criteria_id}/attachment`}
+          onClose={() => setPreviewProof(null)}
+        />
+      )}
       {previewDoc && (
         <DocumentPreviewModal
           basePath={`/recruitment/candidates/${candidateId}/documents`}
@@ -813,7 +835,7 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
   );
 }
 
-function ProofCell({ fileName, onUpload, onDownload }) {
+function ProofCell({ fileName, onUpload, onDownload, onPreview, onDelete }) {
   const inputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
 
@@ -829,14 +851,24 @@ function ProofCell({ fileName, onUpload, onDownload }) {
   return (
     <div className="flex items-center gap-2">
       {fileName ? (
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline"
-          onClick={onDownload}
-          title={fileName}
-        >
-          <Paperclip size={12} /> <span className="max-w-[100px] truncate">{fileName}</span>
-        </button>
+        <>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline"
+            onClick={onPreview}
+            title={fileName}
+          >
+            <Paperclip size={12} /> <span className="max-w-[100px] truncate">{fileName}</span>
+          </button>
+          <button type="button" className="text-xs text-ink/40 hover:text-ink/70" onClick={onDownload} title="Download">
+            <Download size={12} />
+          </button>
+          {onDelete && (
+            <button type="button" className="text-xs text-danger/60 hover:text-danger" onClick={onDelete} title="Remove">
+              <Trash2 size={12} />
+            </button>
+          )}
+        </>
       ) : (
         <span className="text-xs text-ink/30">—</span>
       )}

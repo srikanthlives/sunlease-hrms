@@ -9,8 +9,10 @@ import { Button } from "./ui";
 // every place this is used carries a mime_type field on the row it's
 // passed (e.g. EmployeeReviewSummary's /employees/{id} `documents` list
 // doesn't include one).
-export default function DocumentPreviewModal({ episodeId, document, onClose, basePath }) {
+export default function DocumentPreviewModal({ episodeId, document, onClose, basePath, previewUrl, downloadUrl }) {
   const base = basePath || `/employees/${episodeId}/documents`;
+  const resolvedPreviewUrl = previewUrl || `${base}/${document.id}/preview`;
+  const resolvedDownloadUrl = downloadUrl || `${base}/${document.id}/download`;
   const [objectUrl, setObjectUrl] = useState(null);
   const [mimeType, setMimeType] = useState(document?.mime_type || "");
   const [loading, setLoading] = useState(true);
@@ -21,7 +23,7 @@ export default function DocumentPreviewModal({ episodeId, document, onClose, bas
     setLoading(true);
     setError("");
     setObjectUrl(null);
-    client.get(`${base}/${document.id}/preview`, { responseType: "blob" })
+    client.get(resolvedPreviewUrl, { responseType: "blob" })
       .then((res) => {
         url = URL.createObjectURL(res.data);
         setObjectUrl(url);
@@ -34,10 +36,10 @@ export default function DocumentPreviewModal({ episodeId, document, onClose, bas
       if (url) URL.revokeObjectURL(url);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, document?.id]);
+  }, [resolvedPreviewUrl]);
 
   async function download() {
-    const res = await client.get(`${base}/${document.id}/download`, { responseType: "blob" });
+    const res = await client.get(resolvedDownloadUrl, { responseType: "blob" });
     const url = URL.createObjectURL(res.data);
     const a = window.document.createElement("a");
     a.href = url;

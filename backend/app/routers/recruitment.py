@@ -464,9 +464,7 @@ def upload_stage_result_attachment(
     return {"ok": True, "attachment_file_name": stage_result.attachment_file_name}
 
 
-@router.get("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
-def download_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db)):
-    candidate = _get_candidate(db, candidate_id)
+def _get_stage_result_with_attachment(db: Session, candidate: Candidate, criteria_id: int) -> CandidateStageResult:
     stage_result = (
         db.query(CandidateStageResult)
         .filter(CandidateStageResult.candidate_id == candidate.id, CandidateStageResult.criteria_id == criteria_id)
@@ -474,7 +472,30 @@ def download_stage_result_attachment(candidate_id: int, criteria_id: int, db: Se
     )
     if not stage_result or not stage_result.attachment_object_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No proof document uploaded for this criteria")
-    return FileResponse(recruitment_service.stage_result_attachment_path(stage_result), filename=stage_result.attachment_file_name)
+    return stage_result
+
+
+@router.get("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
+def download_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db)):
+    candidate = _get_candidate(db, candidate_id)
+    stage_result = _get_stage_result_with_attachment(db, candidate, criteria_id)
+    return FileResponse(recruitment_service.stage_result_attachment_path(stage_result), filename=stage_result.attachment_file_name, media_type=stage_result.attachment_mime_type)
+
+
+@router.get("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment/preview", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
+def preview_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db)):
+    candidate = _get_candidate(db, candidate_id)
+    stage_result = _get_stage_result_with_attachment(db, candidate, criteria_id)
+    return FileResponse(recruitment_service.stage_result_attachment_path(stage_result), media_type=stage_result.attachment_mime_type)
+
+
+@router.delete("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def delete_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    candidate = _get_candidate(db, candidate_id)
+    stage_result = _get_stage_result_with_attachment(db, candidate, criteria_id)
+    recruitment_service.delete_stage_result_attachment(db, stage_result, user)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/candidates/{candidate_id}/convert", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

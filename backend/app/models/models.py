@@ -1494,6 +1494,7 @@ class CandidateStageResult(Base):
     reviewed_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     attachment_object_key = Column(String(500), nullable=True)
     attachment_file_name = Column(String(255), nullable=True)
+    attachment_mime_type = Column(String(120), nullable=True)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
     candidate = relationship("Candidate", back_populates="stage_results")

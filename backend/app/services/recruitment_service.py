@@ -104,6 +104,7 @@ def criteria_status(db: Session, candidate: Candidate) -> list[dict]:
             "remarks": result.remarks if result else None,
             "stage_result_id": result.id if result else None,
             "attachment_file_name": result.attachment_file_name if result else None,
+            "attachment_mime_type": result.attachment_mime_type if result else None,
         })
     return out
 
@@ -397,9 +398,27 @@ def save_stage_result_attachment(db: Session, stage_result: CandidateStageResult
 
     stage_result.attachment_object_key = os.path.relpath(full_path, settings.UPLOAD_DIR)
     stage_result.attachment_file_name = upload_file.filename
+    stage_result.attachment_mime_type = upload_file.content_type
     db.add(stage_result)
     audit_service.record(db, "CANDIDATE_STAGE_RESULT", stage_result.id, AuditAction.UPDATE, actor, new_value=f"attachment uploaded for criteria {stage_result.criteria_id}")
     return stage_result
+
+
+def delete_stage_result_attachment(db: Session, stage_result: CandidateStageResult, actor: User) -> None:
+    """Removes the proof file from disk as well as clearing the DB
+    columns - same "clean the repository of deleted documents" convention
+    as document_service.delete_candidate_document. The result itself
+    (PASS/FAIL/EXCEPTION, tested_on, remarks) is untouched - only the
+    attachment goes."""
+    if stage_result.attachment_object_key:
+        path = stage_result_attachment_path(stage_result)
+        if os.path.exists(path):
+            os.remove(path)
+    stage_result.attachment_object_key = None
+    stage_result.attachment_file_name = None
+    stage_result.attachment_mime_type = None
+    db.add(stage_result)
+    audit_service.record(db, "CANDIDATE_STAGE_RESULT", stage_result.id, AuditAction.UPDATE, actor, old_value=f"attachment removed for criteria {stage_result.criteria_id}")
 
 
 def stage_result_attachment_path(stage_result: CandidateStageResult) -> str:
