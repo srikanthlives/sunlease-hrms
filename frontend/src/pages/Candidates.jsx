@@ -158,11 +158,14 @@ export default function Candidates() {
   const [bulkError, setBulkError] = useState("");
 
   function reload() {
-    const params = {};
-    if (statusFilter) params.status_ = statusFilter;
-    client.get("/recruitment/candidates", { params }).then((res) => setCandidates(res.data)).catch((err) => setError(apiErrorMessage(err)));
+    // Always fetches every candidate regardless of the Status filter -
+    // Status is applied client-side below (same as Cost Center/Project/
+    // Category) so that typing a search term (name/reference/mobile/
+    // Aadhaar/PAN/DL) can find a match in ANY status, not just whichever
+    // one the Status dropdown currently happens to be set to.
+    client.get("/recruitment/candidates").then((res) => setCandidates(res.data)).catch((err) => setError(apiErrorMessage(err)));
   }
-  useEffect(reload, [statusFilter]);
+  useEffect(reload, []);
 
   useEffect(() => {
     client.get("/designations").then((res) => setDesignations(res.data));
@@ -295,6 +298,10 @@ export default function Candidates() {
       const mobileMatch = searchDigits.length >= 4 && (c.mobile_number || "").includes(searchDigits);
       if (!name.includes(searchTerm) && !ref.includes(searchTerm) && !aadhaarMatch && !panMatch && !dlMatch && !mobileMatch) return false;
     }
+    // A search term overrides the Status filter (see reload() above) -
+    // finding who you're looking for matters more than staying within
+    // whatever status happened to be selected.
+    if (!searchTerm && statusFilter && c.status !== statusFilter) return false;
     if (costCenterFilter && String(c.applied_cost_center_id) !== costCenterFilter) return false;
     if (projectFilter && String(c.applied_project_id) !== projectFilter) return false;
     if (categoryFilter && String(c.applied_employee_category_id) !== categoryFilter) return false;
