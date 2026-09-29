@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2, FileText, Paperclip } from "lucide-react";
+import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2, FileText, Eye, CheckCircle2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, sortRows, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -268,6 +268,7 @@ export default function Employees() {
                 onClick={(e) => { e.stopPropagation(); openDocsPopup(r); }}
               >
                 <FileText size={13} /> {r.documents_uploaded_count}
+                {r.documents_all_mandatory_uploaded && <CheckCircle2 size={13} className="text-ok" title="All mandatory documents uploaded" />}
               </button>
             ),
           }
@@ -483,7 +484,7 @@ export default function Employees() {
                             downloadUrl: `/employees/${docsPopup.episode.episode_id}/documents/${d.document_meta_id}/download`,
                           })}
                         >
-                          <Paperclip size={14} />
+                          <Eye size={14} />
                         </Button>
                       ) : (
                         <span className="text-xs text-ink/30">Not uploaded</span>

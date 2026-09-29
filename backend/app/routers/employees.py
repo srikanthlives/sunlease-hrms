@@ -235,6 +235,7 @@ def list_employees(
         # overlap window to resolve against).
         if cost_center_id is not None and year is None and month is None and cc_id != cost_center_id:
             continue
+        mandatory_docs = [d for d in document_service.resolve_required_documents(db, e) if d["is_mandatory"]]
         rows.append({
             "episode_id": e.id,
             "employee_id": e.employee_id,
@@ -256,6 +257,7 @@ def list_employees(
             "department": departments.get(assignment.department_id) if assignment else None,
             "project": project_names.get(assignment.project_id) if assignment and assignment.project_id else None,
             "documents_uploaded_count": len(e.documents),
+            "documents_all_mandatory_uploaded": bool(mandatory_docs) and all(d["uploaded"] for d in mandatory_docs),
             "father_husband_name": e.employee.father_husband_name,
             "date_of_birth": e.employee.date_of_birth,
             "personal_email": e.employee.personal_email,

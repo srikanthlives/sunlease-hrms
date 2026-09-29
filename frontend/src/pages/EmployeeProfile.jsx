@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, StatusBadge, SectionDivider, formatAadhaar, formatDate, formatDateTime } from "../components/ui";
-import { Download, Trash2, Upload, RefreshCw } from "lucide-react";
+import { Download, Trash2, Upload } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import EmployeeReviewSummary from "../components/EmployeeReviewSummary";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -655,7 +655,7 @@ export default function EmployeeProfile() {
                       aria-label={d.uploaded ? "Replace" : "Upload"}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {d.uploaded ? <RefreshCw size={14} /> : <Upload size={14} />}
+                      <Upload size={14} />
                       <input type="file" className="hidden" onChange={(e) => uploadDocument(d.document_type_id, e.target.files[0])} />
                     </label>
                   )}

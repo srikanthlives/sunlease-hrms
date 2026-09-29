@@ -265,6 +265,9 @@ def list_candidates(status_: str | None = None, designation_id: int | None = Non
     out = []
     for c in rows:
         criteria = recruitment_service.criteria_status(db, c)
+        mandatory_criteria = [r for r in criteria if r["is_mandatory"]]
+        required_docs = document_service.resolve_required_documents_for_candidate(db, c)
+        mandatory_docs = [d for d in required_docs if d["is_mandatory"]]
         out.append({
             **_candidate_summary_dict(c),
             # Counts for the list view's Documents/Tests button badges - the
@@ -272,8 +275,10 @@ def list_candidates(status_: str | None = None, designation_id: int | None = Non
             # on demand from GET /candidates/{id} when a popup is opened,
             # rather than carried on every row here.
             "documents_uploaded_count": len(c.documents),
+            "documents_all_mandatory_uploaded": bool(mandatory_docs) and all(d["uploaded"] for d in mandatory_docs),
             "tests_recorded_count": sum(1 for r in criteria if r["result"] != "PENDING"),
             "tests_total_count": len(criteria),
+            "tests_all_mandatory_passed": bool(mandatory_criteria) and all(r["result"] in ("PASS", "EXCEPTION") for r in mandatory_criteria),
         })
     return out
 

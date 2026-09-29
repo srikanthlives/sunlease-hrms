@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, SectionDivider, StatusBadge, formatAadhaar, formatDate } from "../components/ui";
-import { Download, Trash2, Upload, RefreshCw } from "lucide-react";
+import { Download, Trash2, Upload } from "lucide-react";
 
 // Driving Licence is inserted before Review & Submit only when a
 // DrivingLicenceRequirement rule matches this employee's Employee Type/
@@ -811,7 +811,7 @@ export default function EmployeeWizard() {
                       title={d.uploaded ? "Replace" : "Upload"}
                       aria-label={d.uploaded ? "Replace" : "Upload"}
                     >
-                      {d.uploaded ? <RefreshCw size={14} /> : <Upload size={14} />}
+                      <Upload size={14} />
                       <input
                         type="file"
                         className="hidden"

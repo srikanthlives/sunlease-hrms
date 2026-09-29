@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { X, Upload, Download, SlidersHorizontal, FileText, ClipboardList, Paperclip } from "lucide-react";
+import { X, Upload, Download, SlidersHorizontal, FileText, ClipboardList, Eye, CheckCircle2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -248,6 +248,7 @@ export default function Candidates() {
             onClick={(e) => { e.stopPropagation(); openDocsPopup(r.id); }}
           >
             <FileText size={13} /> {r.documents_uploaded_count}
+            {r.documents_all_mandatory_uploaded && <CheckCircle2 size={13} className="text-ok" title="All mandatory documents uploaded" />}
           </button>
         ),
       };
@@ -262,6 +263,7 @@ export default function Candidates() {
             onClick={(e) => { e.stopPropagation(); openTestsPopup(r.id); }}
           >
             <ClipboardList size={13} /> {r.tests_recorded_count}/{r.tests_total_count}
+            {r.tests_all_mandatory_passed && <CheckCircle2 size={13} className="text-ok" title="All mandatory tests passed or excepted" />}
           </button>
         ),
       };
@@ -620,7 +622,7 @@ export default function Candidates() {
                             downloadUrl: `/recruitment/candidates/${docsPopup.candidate.id}/documents/${d.document_id}/download`,
                           })}
                         >
-                          <Paperclip size={14} />
+                          <Eye size={14} />
                         </Button>
                       ) : (
                         <span className="text-xs text-ink/30">Not uploaded</span>
@@ -675,7 +677,7 @@ export default function Candidates() {
                             downloadUrl: `/recruitment/candidates/${testsPopup.candidate.id}/stage-results/${r.criteria_id}/attachment`,
                           })}
                         >
-                          <Paperclip size={14} />
+                          <Eye size={14} />
                         </Button>
                       ) : (
                         <span className="text-xs text-ink/30">No proof</span>

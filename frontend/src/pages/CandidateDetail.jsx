@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Paperclip, Upload, Download, Trash2, RefreshCw } from "lucide-react";
+import { Paperclip, Eye, Upload, Download, Trash2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -607,7 +607,7 @@ export default function CandidateDetail() {
                       variant="outline" size="sm" className="!p-1.5" title="Preview" aria-label="Preview"
                       onClick={() => setPreviewDoc({ id: d.document_id, file_name: d.file_name, document_type: d.document_type_name })}
                     >
-                      <Paperclip size={14} />
+                      <Eye size={14} />
                     </Button>
                     <Button variant="outline" size="sm" className="!p-1.5" title="Download" aria-label="Download" onClick={() => downloadDocument(d.document_id, d.file_name)}>
                       <Download size={14} />
@@ -629,7 +629,7 @@ export default function CandidateDetail() {
                     title={d.uploaded ? "Replace" : "Upload"}
                     aria-label={d.uploaded ? "Replace" : "Upload"}
                   >
-                    {d.uploaded ? <RefreshCw size={14} /> : <Upload size={14} />}
+                    <Upload size={14} />
                     <input type="file" className="hidden" onChange={(e) => uploadDocument(d.document_type_id, e.target.files[0])} />
                   </label>
                 )}

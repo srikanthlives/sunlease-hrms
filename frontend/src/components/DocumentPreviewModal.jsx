@@ -50,8 +50,8 @@ export default function DocumentPreviewModal({ episodeId, document, onClose, bas
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-lg p-5 w-full max-w-3xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
+      <div className="bg-white rounded-lg p-5 w-full max-w-[95vw] h-[95vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4 shrink-0">
           <h3 className="text-sm font-semibold text-ink">{document.file_name || document.document_type || "Document Preview"}</h3>
           <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
         </div>
@@ -61,9 +61,11 @@ export default function DocumentPreviewModal({ episodeId, document, onClose, bas
 
         {!loading && !error && objectUrl && (
           mimeType.startsWith("image/") ? (
-            <img src={objectUrl} alt={document.file_name || "Document"} className="max-w-full max-h-[70vh] mx-auto" />
+            <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center">
+              <img src={objectUrl} alt={document.file_name || "Document"} className="max-w-full max-h-full mx-auto" />
+            </div>
           ) : mimeType === "application/pdf" ? (
-            <iframe src={objectUrl} title={document.file_name || "Document"} className="w-full h-[70vh]" />
+            <iframe src={objectUrl} title={document.file_name || "Document"} className="w-full flex-1 min-h-0" />
           ) : (
             <div className="text-center py-10 space-y-3">
               <p className="text-sm text-ink/50">Preview not available for this file type.</p>
