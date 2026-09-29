@@ -255,6 +255,7 @@ def list_employees(
             "cost_center": cost_centers.get(cc_id),
             "department": departments.get(assignment.department_id) if assignment else None,
             "project": project_names.get(assignment.project_id) if assignment and assignment.project_id else None,
+            "documents_uploaded_count": len(e.documents),
             "father_husband_name": e.employee.father_husband_name,
             "date_of_birth": e.employee.date_of_birth,
             "personal_email": e.employee.personal_email,

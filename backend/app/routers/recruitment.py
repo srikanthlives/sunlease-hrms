@@ -262,7 +262,20 @@ def list_candidates(status_: str | None = None, designation_id: int | None = Non
     if cost_center_id is not None:
         query = query.filter(Candidate.applied_cost_center_id == cost_center_id)
     rows = query.order_by(Candidate.created_at.desc()).all()
-    return [_candidate_summary_dict(c) for c in rows]
+    out = []
+    for c in rows:
+        criteria = recruitment_service.criteria_status(db, c)
+        out.append({
+            **_candidate_summary_dict(c),
+            # Counts for the list view's Documents/Tests button badges - the
+            # full lists (which documents/tests, uploaded or not) are fetched
+            # on demand from GET /candidates/{id} when a popup is opened,
+            # rather than carried on every row here.
+            "documents_uploaded_count": len(c.documents),
+            "tests_recorded_count": sum(1 for r in criteria if r["result"] != "PENDING"),
+            "tests_total_count": len(criteria),
+        })
+    return out
 
 
 @router.get("/candidates-bulk-upload-template", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2 } from "lucide-react";
+import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2, FileText, Paperclip } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, sortRows, formatDate } from "../components/ui";
+import DocumentPreviewModal from "../components/DocumentPreviewModal";
 
 const ALL_COLUMNS = [
   {
@@ -24,6 +25,11 @@ const ALL_COLUMNS = [
   { key: "cost_center", header: "Cost Center", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.cost_center || "—" },
   { key: "department", header: "Department", sortable: true, defaultVisible: true, maxWidth: 160, render: (r) => r.department || "—" },
   { key: "status", header: "Status", sortable: true, defaultVisible: true, maxWidth: 140, render: (r) => <StatusBadge status={r.status} /> },
+  {
+    key: "documents", header: "Documents", sortable: true, defaultVisible: true, maxWidth: 110,
+    sortAccessor: (r) => r.documents_uploaded_count,
+    render: (r) => `${r.documents_uploaded_count}`, // overridden below with the actual button (needs component state)
+  },
   { key: "date_of_joining", header: "Date of Joining", sortable: true, defaultVisible: true, maxWidth: 130, tooltip: (r) => formatDate(r.date_of_joining), render: (r) => formatDate(r.date_of_joining) },
   { key: "separation_date", header: "Exit Date", sortable: true, defaultVisible: true, maxWidth: 130, tooltip: (r) => formatDate(r.separation_date), render: (r) => formatDate(r.separation_date) },
   { key: "employment_type", header: "Employment Type", sortable: true, defaultVisible: false, maxWidth: 150, render: (r) => r.employment_type || "—" },
@@ -236,7 +242,38 @@ export default function Employees() {
   useEffect(() => setPage(1), [sort]);
   const { pageRows, page: safePage, pageCount, total } = usePagination(sortedRows, page, pageSize);
 
-  const columns = [...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)), makeActionsColumn(navigate, deleteEmployee)];
+  const [docsPopup, setDocsPopup] = useState(null); // { loading, episode, required_documents }
+  const [popupPreview, setPopupPreview] = useState(null); // { id, file_name, previewUrl, downloadUrl }
+
+  async function openDocsPopup(row) {
+    setDocsPopup({ loading: true, episode: row, required_documents: [] });
+    try {
+      const res = await client.get(`/employees/${row.episode_id}/required-documents`);
+      setDocsPopup({ loading: false, episode: row, required_documents: res.data });
+    } catch (err) {
+      setDocsPopup({ loading: false, episode: row, required_documents: [], error: apiErrorMessage(err) });
+    }
+  }
+
+  const columns = [
+    ...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)).map((c) => (
+      c.key === "documents"
+        ? {
+            ...c,
+            render: (r) => (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline"
+                onClick={(e) => { e.stopPropagation(); openDocsPopup(r); }}
+              >
+                <FileText size={13} /> {r.documents_uploaded_count}
+              </button>
+            ),
+          }
+        : c
+    )),
+    makeActionsColumn(navigate, deleteEmployee),
+  ];
   const filtersActive = search || statusFilter || costCenterFilter || departmentFilter || employmentTypeFilter || categoryFilter;
 
   return (
@@ -405,6 +442,67 @@ export default function Employees() {
             </div>
           </div>
         </div>
+      )}
+
+      {docsPopup && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDocsPopup(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-lg max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-ink">
+                Documents{docsPopup.episode ? ` — ${docsPopup.episode.first_name} ${docsPopup.episode.last_name}` : ""}
+              </h3>
+              <Button variant="outline" size="sm" onClick={() => setDocsPopup(null)}>Close</Button>
+            </div>
+            {docsPopup.loading && <div className="text-sm text-ink/40 py-8 text-center">Loading…</div>}
+            {docsPopup.error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{docsPopup.error}</div>}
+            {!docsPopup.loading && !docsPopup.error && (
+              docsPopup.required_documents.length === 0 ? (
+                <p className="text-sm text-ink/40 py-6 text-center">No document requirements configured for this employee's Type/Category/Designation.</p>
+              ) : (
+                <div className="space-y-2">
+                  {docsPopup.required_documents.map((d) => (
+                    <div key={d.document_type_id} className="border border-ink/10 rounded-md p-3 flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-medium text-ink flex items-center gap-2">
+                          {d.document_type_name}
+                          {d.is_mandatory ? (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-danger/10 text-danger">Mandatory</span>
+                          ) : (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-ink/5 text-ink/50">Optional</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-ink/50 mt-0.5">{d.uploaded ? d.file_name : "—"}</div>
+                      </div>
+                      {d.uploaded ? (
+                        <Button
+                          variant="outline" size="sm" className="!p-1.5" title="Preview" aria-label="Preview"
+                          onClick={() => setPopupPreview({
+                            id: d.document_meta_id, file_name: d.file_name,
+                            previewUrl: `/employees/${docsPopup.episode.episode_id}/documents/${d.document_meta_id}/preview`,
+                            downloadUrl: `/employees/${docsPopup.episode.episode_id}/documents/${d.document_meta_id}/download`,
+                          })}
+                        >
+                          <Paperclip size={14} />
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-ink/30">Not uploaded</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+      {popupPreview && (
+        <DocumentPreviewModal
+          document={popupPreview}
+          previewUrl={popupPreview.previewUrl}
+          downloadUrl={popupPreview.downloadUrl}
+          onClose={() => setPopupPreview(null)}
+        />
       )}
     </div>
   );

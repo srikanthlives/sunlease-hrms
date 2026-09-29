@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { X, Upload, Download, SlidersHorizontal } from "lucide-react";
+import { X, Upload, Download, SlidersHorizontal, FileText, ClipboardList, Paperclip } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
+import DocumentPreviewModal from "../components/DocumentPreviewModal";
 
 const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED", "WITHDRAWN"];
 
@@ -57,6 +58,16 @@ const ALL_COLUMNS = [
   { key: "applied_date", header: "Applied On", sortable: true, fixedWidth: 110, defaultVisible: true, tooltip: (r) => formatDate(r.applied_date), render: (r) => formatDate(r.applied_date) },
   { key: "mobile_number", header: "Mobile", sortable: true, fixedWidth: 120, defaultVisible: true, render: (r) => r.mobile_number || "—" },
   { key: "status", header: "Status", sortable: true, fixedWidth: 130, defaultVisible: true, render: (r) => <StatusBadge status={r.status} /> },
+  {
+    key: "documents", header: "Documents", sortable: true, defaultVisible: true, fixedWidth: 110,
+    sortAccessor: (r) => r.documents_uploaded_count,
+    render: (r) => `${r.documents_uploaded_count}`, // overridden below with the actual button (needs component state)
+  },
+  {
+    key: "tests", header: "Tests", sortable: true, defaultVisible: true, fixedWidth: 110,
+    sortAccessor: (r) => r.tests_recorded_count,
+    render: (r) => `${r.tests_recorded_count}/${r.tests_total_count}`, // overridden below with the actual button
+  },
   { key: "gender", header: "Gender", sortable: true, fixedWidth: 90, defaultVisible: false, render: (r) => r.gender || "—" },
   { key: "date_of_birth", header: "Date of Birth", sortable: true, fixedWidth: 110, defaultVisible: false, tooltip: (r) => formatDate(r.date_of_birth), render: (r) => formatDate(r.date_of_birth) },
   { key: "alternate_mobile_number", header: "Alternate Mobile", sortable: true, fixedWidth: 130, defaultVisible: false, render: (r) => r.alternate_mobile_number || "—" },
@@ -105,6 +116,29 @@ export default function Candidates() {
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
   const [sort, setSort] = useState(null);
+  const [docsPopup, setDocsPopup] = useState(null); // { loading, candidate, required_documents }
+  const [testsPopup, setTestsPopup] = useState(null); // { loading, candidate, criteria_status }
+  const [popupPreview, setPopupPreview] = useState(null); // { id, file_name, previewUrl, downloadUrl }
+
+  async function openDocsPopup(candidateId) {
+    setDocsPopup({ loading: true, candidate: null, required_documents: [] });
+    try {
+      const res = await client.get(`/recruitment/candidates/${candidateId}`);
+      setDocsPopup({ loading: false, candidate: res.data, required_documents: res.data.required_documents || [] });
+    } catch (err) {
+      setDocsPopup({ loading: false, candidate: null, required_documents: [], error: apiErrorMessage(err) });
+    }
+  }
+
+  async function openTestsPopup(candidateId) {
+    setTestsPopup({ loading: true, candidate: null, criteria_status: [] });
+    try {
+      const res = await client.get(`/recruitment/candidates/${candidateId}`);
+      setTestsPopup({ loading: false, candidate: res.data, criteria_status: res.data.criteria_status || [] });
+    } catch (err) {
+      setTestsPopup({ loading: false, candidate: null, criteria_status: [], error: apiErrorMessage(err) });
+    }
+  }
   const [statusFilter, setStatusFilter] = useState("APPROVED");
   const [costCenterFilter, setCostCenterFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
@@ -199,7 +233,37 @@ export default function Candidates() {
     }
   }
 
-  const columns = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
+  const columns = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)).map((c) => {
+    if (c.key === "documents") {
+      return {
+        ...c,
+        render: (r) => (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline"
+            onClick={(e) => { e.stopPropagation(); openDocsPopup(r.id); }}
+          >
+            <FileText size={13} /> {r.documents_uploaded_count}
+          </button>
+        ),
+      };
+    }
+    if (c.key === "tests") {
+      return {
+        ...c,
+        render: (r) => (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline"
+            onClick={(e) => { e.stopPropagation(); openTestsPopup(r.id); }}
+          >
+            <ClipboardList size={13} /> {r.tests_recorded_count}/{r.tests_total_count}
+          </button>
+        ),
+      };
+    }
+    return c;
+  });
 
   useEffect(() => {
     localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify([...visibleColumns]));
@@ -502,6 +566,122 @@ export default function Candidates() {
             </div>
           </div>
         </div>
+      )}
+
+      {docsPopup && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDocsPopup(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-lg max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-ink">
+                Documents{docsPopup.candidate ? ` — ${docsPopup.candidate.first_name} ${docsPopup.candidate.last_name}` : ""}
+              </h3>
+              <Button variant="outline" size="sm" onClick={() => setDocsPopup(null)}>Close</Button>
+            </div>
+            {docsPopup.loading && <div className="text-sm text-ink/40 py-8 text-center">Loading…</div>}
+            {docsPopup.error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{docsPopup.error}</div>}
+            {!docsPopup.loading && !docsPopup.error && (
+              docsPopup.required_documents.length === 0 ? (
+                <p className="text-sm text-ink/40 py-6 text-center">No document requirements configured for this candidate's Category/Designation.</p>
+              ) : (
+                <div className="space-y-2">
+                  {docsPopup.required_documents.map((d) => (
+                    <div key={d.document_type_id} className="border border-ink/10 rounded-md p-3 flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-medium text-ink flex items-center gap-2">
+                          {d.document_type_name}
+                          {d.is_mandatory ? (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-danger/10 text-danger">Mandatory</span>
+                          ) : (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-ink/5 text-ink/50">Optional</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-ink/50 mt-0.5">{d.uploaded ? d.file_name : "—"}</div>
+                      </div>
+                      {d.uploaded ? (
+                        <Button
+                          variant="outline" size="sm" className="!p-1.5" title="Preview" aria-label="Preview"
+                          onClick={() => setPopupPreview({
+                            id: d.document_id, file_name: d.file_name,
+                            previewUrl: `/recruitment/candidates/${docsPopup.candidate.id}/documents/${d.document_id}/preview`,
+                            downloadUrl: `/recruitment/candidates/${docsPopup.candidate.id}/documents/${d.document_id}/download`,
+                          })}
+                        >
+                          <Paperclip size={14} />
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-ink/30">Not uploaded</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+      {testsPopup && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setTestsPopup(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-lg max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-ink">
+                Selection Criteria{testsPopup.candidate ? ` — ${testsPopup.candidate.first_name} ${testsPopup.candidate.last_name}` : ""}
+              </h3>
+              <Button variant="outline" size="sm" onClick={() => setTestsPopup(null)}>Close</Button>
+            </div>
+            {testsPopup.loading && <div className="text-sm text-ink/40 py-8 text-center">Loading…</div>}
+            {testsPopup.error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{testsPopup.error}</div>}
+            {!testsPopup.loading && !testsPopup.error && (
+              testsPopup.criteria_status.length === 0 ? (
+                <p className="text-sm text-ink/40 py-6 text-center">No selection criteria configured for this candidate's Designation.</p>
+              ) : (
+                <div className="space-y-2">
+                  {testsPopup.criteria_status.map((r) => (
+                    <div key={r.criteria_id} className="border border-ink/10 rounded-md p-3 flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-medium text-ink flex items-center gap-2">
+                          {r.criteria_name}
+                          {r.is_mandatory ? (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-danger/10 text-danger">Mandatory</span>
+                          ) : (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-ink/5 text-ink/50">Optional</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-ink/50 mt-0.5 flex items-center gap-2">
+                          <StatusBadge status={r.result} />
+                          {r.tested_on && <span>{formatDate(r.tested_on)}</span>}
+                        </div>
+                      </div>
+                      {r.attachment_file_name ? (
+                        <Button
+                          variant="outline" size="sm" className="!p-1.5" title="Preview" aria-label="Preview"
+                          onClick={() => setPopupPreview({
+                            id: r.criteria_id, file_name: r.attachment_file_name,
+                            previewUrl: `/recruitment/candidates/${testsPopup.candidate.id}/stage-results/${r.criteria_id}/attachment/preview`,
+                            downloadUrl: `/recruitment/candidates/${testsPopup.candidate.id}/stage-results/${r.criteria_id}/attachment`,
+                          })}
+                        >
+                          <Paperclip size={14} />
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-ink/30">No proof</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+      {popupPreview && (
+        <DocumentPreviewModal
+          document={popupPreview}
+          previewUrl={popupPreview.previewUrl}
+          downloadUrl={popupPreview.downloadUrl}
+          onClose={() => setPopupPreview(null)}
+        />
       )}
     </div>
   );
