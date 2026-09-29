@@ -80,7 +80,8 @@ function makeActionsColumn(navigate, onDelete) {
 // Bumped (v2) so everyone picks up the new Date of Joining/Exit Date
 // defaults below, instead of an already-saved column set silently
 // hiding them forever.
-const VISIBLE_COLUMNS_KEY = "hrms_employees_visible_columns_v2";
+// Bumped (v3) so everyone picks up the new Documents column default below.
+const VISIBLE_COLUMNS_KEY = "hrms_employees_visible_columns_v3";
 
 function loadVisibleColumns() {
   try {

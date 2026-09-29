@@ -175,7 +175,7 @@ def _candidate_summary_dict(c: Candidate) -> dict:
         "applied_employee_category_id": c.applied_employee_category_id,
         "applied_employee_category_name": c.employee_category.name if c.employee_category else None,
         "applied_date": c.applied_date, "status": c.status,
-        "mobile_number": c.mobile_number,
+        "mobile_number": c.mobile_number, "aadhaar": c.aadhaar, "pan": c.pan, "dl_licence_number": c.dl_licence_number,
         # Extra list-view columns (hidden by default in the UI).
         "gender": c.gender, "date_of_birth": c.date_of_birth, "alternate_mobile_number": c.alternate_mobile_number,
         "personal_email": c.personal_email, "educational_qualification": c.educational_qualification,

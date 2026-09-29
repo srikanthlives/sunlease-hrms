@@ -81,7 +81,8 @@ const ALL_COLUMNS = [
   { key: "created_at", header: "Registered On", sortable: true, fixedWidth: 120, defaultVisible: false, tooltip: (r) => formatDate(r.created_at), render: (r) => formatDate(r.created_at) },
 ];
 
-const VISIBLE_COLUMNS_KEY = "hrms_candidates_visible_columns_v1";
+// Bumped (v2) so everyone picks up the new Documents/Tests column defaults below.
+const VISIBLE_COLUMNS_KEY = "hrms_candidates_visible_columns_v2";
 
 function loadVisibleColumns() {
   try {
@@ -282,11 +283,17 @@ export default function Candidates() {
   }
 
   const searchTerm = search.trim().toLowerCase();
+  const searchDigits = search.replace(/\D/g, "");
+  const searchAlnum = search.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
   const visibleCandidates = candidates.filter((c) => {
     if (searchTerm) {
       const name = `${c.first_name} ${c.last_name}`.toLowerCase();
       const ref = (c.reference_number || "").toLowerCase();
-      if (!name.includes(searchTerm) && !ref.includes(searchTerm)) return false;
+      const aadhaarMatch = searchDigits.length >= 4 && (c.aadhaar || "").includes(searchDigits);
+      const panMatch = searchAlnum.length >= 4 && (c.pan || "").includes(searchAlnum);
+      const dlMatch = searchAlnum.length >= 4 && (c.dl_licence_number || "").toUpperCase().replace(/[^A-Z0-9]/g, "").includes(searchAlnum);
+      const mobileMatch = searchDigits.length >= 4 && (c.mobile_number || "").includes(searchDigits);
+      if (!name.includes(searchTerm) && !ref.includes(searchTerm) && !aadhaarMatch && !panMatch && !dlMatch && !mobileMatch) return false;
     }
     if (costCenterFilter && String(c.applied_cost_center_id) !== costCenterFilter) return false;
     if (projectFilter && String(c.applied_project_id) !== projectFilter) return false;
@@ -441,7 +448,7 @@ export default function Candidates() {
       <Card>
         <div className="flex flex-wrap items-end gap-2 mb-3">
           <div className="w-64">
-            <Input placeholder="Search by name or reference number..." value={search} onChange={(e) => setSearch(e.target.value)} noUppercase />
+            <Input placeholder="Search by name, reference number, mobile, Aadhaar, PAN, or DL number..." value={search} onChange={(e) => setSearch(e.target.value)} noUppercase />
           </div>
           <div className="w-44">
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
