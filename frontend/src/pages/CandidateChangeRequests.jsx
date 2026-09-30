@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, StatusBadge, formatDateTime } from "../components/ui";
+import DocumentCompareModal from "../components/DocumentCompareModal";
 
 export default function CandidateChangeRequests() {
   const navigate = useNavigate();
@@ -10,6 +11,7 @@ export default function CandidateChangeRequests() {
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState(null);
   const [expanded, setExpanded] = useState({});
+  const [compareRequest, setCompareRequest] = useState(null);
 
   function reload() {
     client.get("/recruitment/candidates-change-requests", { params: { status_: "PENDING" } }).then((res) => setRows(res.data));
@@ -77,6 +79,15 @@ export default function CandidateChangeRequests() {
                       <p className="text-sm text-ink/70 mb-2">
                         Requests deleting the uploaded <strong>{r.changes.document_type}</strong> document.
                       </p>
+                    ) : r.request_type === "DOCUMENT_REPLACE" ? (
+                      <div className="mb-2">
+                        <p className="text-sm text-ink/70 mb-2">
+                          Requests replacing the <strong>{r.changes.document_type}</strong> document
+                          {r.changes.old_file_name && <> (currently <strong>{r.changes.old_file_name}</strong>)</>}
+                          {" "}with a new file: <strong>{r.changes.new_file_name}</strong>.
+                        </p>
+                        <Button size="sm" variant="outline" onClick={() => setCompareRequest(r)}>Compare Documents</Button>
+                      </div>
                     ) : (
                       <table className="w-full text-xs mb-2">
                         <thead>
@@ -115,6 +126,17 @@ export default function CandidateChangeRequests() {
           })}
         </div>
       </Card>
+
+      {compareRequest && (
+        <DocumentCompareModal
+          title={`${compareRequest.changes.document_type} — ${compareRequest.candidate_name}`}
+          oldUrl={`/recruitment/candidates-change-requests/${compareRequest.id}/preview?which=old`}
+          oldFileName={compareRequest.changes.old_file_name}
+          newUrl={`/recruitment/candidates-change-requests/${compareRequest.id}/preview?which=new`}
+          newFileName={compareRequest.changes.new_file_name}
+          onClose={() => setCompareRequest(null)}
+        />
+      )}
     </div>
   );
 }

@@ -258,9 +258,39 @@ def stage_replacement(db: Session, episode: EmploymentEpisode, document_type_id:
     }
 
 
+def stage_candidate_replacement(db: Session, candidate: Candidate, document_type_id: int, upload_file: UploadFile) -> dict:
+    """Same as stage_replacement, but for a CandidateDocument - used when a
+    replacement for an already-uploaded document needs approval first
+    (an APPROVED candidate's documents follow the same "approved data must
+    not be overwritten directly" rule as an ACTIVE employee's). The staged
+    file is only made the document of record once the resulting
+    CandidateChangeRequest is approved
+    (recruitment_service.review_candidate_change_request)."""
+    doc_type = db.query(DocumentType).filter(DocumentType.id == document_type_id).first()
+    if not doc_type:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown document type")
+
+    ext = os.path.splitext(upload_file.filename or "")[1]
+    stored_name = f"{_slug(doc_type.name)}-pending-{uuid4().hex[:8]}{ext}"
+    object_key = os.path.join(_candidate_upload_dir(candidate), stored_name)
+
+    content = upload_file.file.read()
+    get_storage().save(object_key, content)
+
+    return {
+        "document_type_id": document_type_id,
+        "new_object_key": object_key,
+        "new_file_name": upload_file.filename,
+        "new_file_size": len(content),
+        "new_mime_type": upload_file.content_type,
+    }
+
+
 def apply_staged_replacement(db: Session, record: DocumentMeta, staged: dict) -> None:
     """Approval-time: swap the record over to the staged file and delete
-    the old one - old and new never coexist past this point."""
+    the old one - old and new never coexist past this point. Also used for
+    a CandidateDocument (see stage_candidate_replacement) - both models
+    carry the same object_key/file_name/file_size/mime_type/version shape."""
     if record.object_key:
         get_storage().delete(record.object_key)
     record.file_name = staged["new_file_name"]

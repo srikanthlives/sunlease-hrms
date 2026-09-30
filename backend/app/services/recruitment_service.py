@@ -328,8 +328,8 @@ def review_candidate_change_request(db: Session, request: CandidateChangeRequest
     request.reviewed_at = dt.datetime.utcnow()
     request.review_remarks = remarks
 
+    changes = json.loads(request.changes_json)
     if approve:
-        changes = json.loads(request.changes_json)
         if request.request_type == "FIELD_CHANGE":
             for field, value in changes.items():
                 setattr(candidate, field, value)
@@ -338,9 +338,15 @@ def review_candidate_change_request(db: Session, request: CandidateChangeRequest
             doc = db.query(CandidateDocument).filter(CandidateDocument.id == changes["document_id"]).first()
             if doc:
                 document_service.delete_candidate_document(db, doc)
+        elif request.request_type == "DOCUMENT_REPLACE":
+            doc = db.query(CandidateDocument).filter(CandidateDocument.id == changes["document_id"]).first()
+            if doc:
+                document_service.apply_staged_replacement(db, doc, changes)
         request.status = "APPROVED"
         audit_service.record(db, "CANDIDATE_CHANGE_REQUEST", request.id, AuditAction.APPROVE, user, new_value=request.changes_json)
     else:
+        if request.request_type == "DOCUMENT_REPLACE":
+            document_service.discard_staged_replacement(changes)
         request.status = "REJECTED"
         audit_service.record(db, "CANDIDATE_CHANGE_REQUEST", request.id, AuditAction.REJECT, user, new_value=remarks)
 

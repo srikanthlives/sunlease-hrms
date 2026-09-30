@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_hr_admin, require_permission
 from app.db.session import atomic_session, get_db
-from app.models.enums import AuditAction, Permission, TransactionType
+from app.models.enums import AuditAction, Permission, RoleName, TransactionType
 from app.models.models import (
     Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
     DesignationCriteria, Project, SelectionCriteria, User,
@@ -555,10 +555,32 @@ def upload_candidate_document(
     candidate = _get_candidate(db, candidate_id)
     if candidate.status == "CONVERTED":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
+
+    existing = db.query(CandidateDocument).filter(
+        CandidateDocument.candidate_id == candidate.id, CandidateDocument.document_type_id == document_type_id,
+    ).first()
+
+    # Replacing an already-uploaded document on an APPROVED candidate needs
+    # HR Admin approval - same rule "approved data must not be overwritten
+    # directly" already applied to deleting a candidate's document (see
+    # delete_candidate_document below) and to an ACTIVE employee's document
+    # replacement (routers/employees.py::upload_document). A brand-new
+    # document type never uploaded before is unaffected - only a genuine
+    # replace is gated.
+    if existing and candidate.status == "APPROVED" and user.role.name not in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN):
+        staged = document_service.stage_candidate_replacement(db, candidate, document_type_id, file)
+        request = recruitment_service.create_candidate_change_request(
+            db, candidate, "DOCUMENT_REPLACE",
+            {**staged, "document_id": existing.id, "document_type": existing.document_type, "old_file_name": existing.file_name},
+            user,
+        )
+        db.commit()
+        return {"ok": True, "submitted_for_approval": True, "change_request_id": request.id}
+
     doc = document_service.save_candidate_document(db, candidate, document_type_id, file, user)
     audit_service.record(db, "CANDIDATE_DOCUMENT", candidate.id, AuditAction.UPDATE, user, new_value=doc.document_type)
     db.commit()
-    return {"ok": True, "id": doc.id, "file_name": doc.file_name}
+    return {"ok": True, "id": doc.id, "file_name": doc.file_name, "submitted_for_approval": False}
 
 
 @router.get("/candidates/{candidate_id}/documents/{document_id}/preview", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
@@ -636,6 +658,31 @@ def list_candidate_change_requests(status_: str | None = Query("PENDING"), candi
         {**_change_request_dict(r), "can_review": bool(candidates.get(r.candidate_id)) and recruitment_service.can_review(db, user, candidates[r.candidate_id], TransactionType.RECRUITMENT_CHANGE)}
         for r in rows
     ]
+
+
+@router.get("/candidates-change-requests/{request_id}/preview", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
+def preview_candidate_document_change(request_id: int, which: str, db: Session = Depends(get_db)):
+    """Streams the old (currently-live) or new (staged) file for a
+    DOCUMENT_REPLACE request, so a reviewer can compare both before
+    approving - the staged file has no CandidateDocument row of its own
+    yet, and the "old" one is simply whatever the live document still is
+    right now (nothing has been swapped until this request is approved)."""
+    request = db.query(CandidateChangeRequest).filter(CandidateChangeRequest.id == request_id).first()
+    if not request or request.request_type != "DOCUMENT_REPLACE":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not a document replacement request")
+
+    changes = json.loads(request.changes_json)
+    if which == "new":
+        object_key = changes["new_object_key"]
+    elif which == "old":
+        doc = db.query(CandidateDocument).filter(CandidateDocument.id == changes["document_id"]).first()
+        if not doc or not doc.object_key:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Original document not found")
+        object_key = doc.object_key
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "which must be 'old' or 'new'")
+
+    return document_service.serve_object(object_key)
 
 
 @router.post("/candidates-change-requests/{request_id}/approve")

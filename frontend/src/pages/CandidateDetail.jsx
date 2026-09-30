@@ -293,7 +293,10 @@ export default function CandidateDetail() {
       const form = new FormData();
       form.append("document_type_id", documentTypeId);
       form.append("file", file);
-      await client.post(`/recruitment/candidates/${candidateId}/documents`, form);
+      const res = await client.post(`/recruitment/candidates/${candidateId}/documents`, form);
+      if (res.data.submitted_for_approval) {
+        window.alert("This candidate is already Approved — replacing this document was submitted as a Change Request and needs approval before it takes effect.");
+      }
       reload();
     } catch (err) {
       setDocError(apiErrorMessage(err));
