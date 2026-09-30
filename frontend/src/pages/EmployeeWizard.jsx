@@ -46,6 +46,7 @@ export default function EmployeeWizard() {
   const [error, setError] = useState("");
   const [banner, setBanner] = useState("");
   const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [detail, setDetail] = useState(null);
   const [masters, setMasters] = useState({ costCenters: [], departments: [], projects: [], categories: [], workLocations: [], designations: [], employeeTypes: [] });
 
@@ -330,6 +331,19 @@ export default function EmployeeWizard() {
   async function next() {
     const ok = await saveCurrentStep();
     if (ok && step < steps.length - 1) setStep(step + 1);
+  }
+
+  async function cancelDraft() {
+    if (!window.confirm("Discard this draft? Nothing entered in this session will be saved, and this cannot be undone.")) return;
+    setCancelling(true);
+    setError("");
+    try {
+      await client.delete(`/employees/${episodeId}`);
+      navigate("/employees");
+    } catch (err) {
+      setError(apiErrorMessage(err));
+      setCancelling(false);
+    }
   }
 
   async function goToStep(index) {
@@ -1164,9 +1178,16 @@ export default function EmployeeWizard() {
       </Card>
 
       <div className="flex justify-between print:hidden">
-        <Button variant="outline" onClick={() => goToStep(Math.max(0, step - 1))} disabled={step === 0}>
-          Back
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => goToStep(Math.max(0, step - 1))} disabled={step === 0}>
+            Back
+          </Button>
+          {detail.episode.status === "DRAFT" && (
+            <Button variant="danger" onClick={cancelDraft} disabled={cancelling || saving}>
+              {cancelling ? "Discarding…" : "Cancel"}
+            </Button>
+          )}
+        </div>
         {step < steps.length - 1 ? (
           <Button onClick={next} disabled={saving || currentStepHasError}>{saving ? "Saving…" : "Save & Continue"}</Button>
         ) : detail.episode.status === "DRAFT" ? (
