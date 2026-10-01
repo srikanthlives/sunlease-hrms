@@ -2,7 +2,7 @@ from datetime import date
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from app.core.validators import validate_aadhaar, validate_email_format, validate_mobile, validate_pan
+from app.core.validators import validate_aadhaar, validate_email_format, validate_mobile, validate_pan, validate_pincode
 
 
 class ChangeRequestReviewIn(BaseModel):
@@ -92,8 +92,20 @@ class CandidateIn(BaseModel):
     dl_issue_date: date | None = None
     dl_expiry_date: date | None = None
 
-    present_address: str | None = None
-    permanent_address: str | None = None
+    # Structured, same shape as Employee's AddressStep - see models.py::Candidate.
+    present_line1: str | None = None
+    present_line2: str | None = None
+    present_city: str | None = None
+    present_state: str | None = None
+    present_pincode: str | None = None
+    present_country: str | None = None
+    same_as_present: bool = False
+    permanent_line1: str | None = None
+    permanent_line2: str | None = None
+    permanent_city: str | None = None
+    permanent_state: str | None = None
+    permanent_pincode: str | None = None
+    permanent_country: str | None = None
 
     applied_designation_id: int
     applied_employee_category_id: int
@@ -122,6 +134,11 @@ class CandidateIn(BaseModel):
     @classmethod
     def _check_email(cls, v):
         return validate_email_format(v) if v else v
+
+    @field_validator("present_pincode", "permanent_pincode")
+    @classmethod
+    def _check_pincode(cls, v):
+        return validate_pincode(v) if v else v
 
     @field_validator("total_experience_years")
     @classmethod

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Paperclip, Eye, Upload, Download, Trash2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
-import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
+import { Card, Button, Input, Select, Checkbox, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import { useAuth } from "../context/AuthContext";
 
@@ -14,6 +14,7 @@ const RESULT_OPTIONS = ["PENDING", "PASS", "FAIL", "EXCEPTION"];
 const MOBILE_REGEX = /^[6-9][0-9]{9}$/;
 const AADHAAR_REGEX = /^[2-9][0-9]{11}$/;
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const PINCODE_REGEX = /^[0-9]{6}$/;
 
 function formatError(value, regex, message) {
   return value && !regex.test(value) ? message : undefined;
@@ -24,7 +25,9 @@ const EDIT_FIELDS = [
   "mobile_number", "alternate_mobile_number", "personal_email", "educational_qualification",
   "aadhaar", "aadhaar_name", "aadhaar_dob", "pan", "pan_name", "pan_dob",
   "current_designation", "current_company_name", "current_company_details", "current_date_of_joining", "total_experience_years",
-  "present_address", "permanent_address",
+  "present_line1", "present_line2", "present_city", "present_state", "present_pincode", "present_country",
+  "same_as_present",
+  "permanent_line1", "permanent_line2", "permanent_city", "permanent_state", "permanent_pincode", "permanent_country",
   "dl_licence_number", "dl_badge_number", "dl_vehicle_class", "dl_issuing_authority", "dl_issue_date", "dl_expiry_date",
   "applied_designation_id", "applied_employee_category_id", "applied_cost_center_id", "applied_project_id",
   "applied_date", "source", "remarks",
@@ -587,8 +590,16 @@ export default function CandidateDetail() {
 
             <SectionDivider>Address</SectionDivider>
             <div className="grid grid-cols-2 gap-3 text-sm mb-4">
-              <Field label="Present Address" value={candidate.present_address} />
-              <Field label="Permanent Address" value={candidate.permanent_address} />
+              <Field
+                label="Present Address"
+                value={[candidate.present_line1, candidate.present_line2, candidate.present_city, candidate.present_state, candidate.present_pincode, candidate.present_country].filter(Boolean).join(", ")}
+              />
+              <Field
+                label="Permanent Address"
+                value={candidate.same_as_present
+                  ? "Same as Present Address"
+                  : [candidate.permanent_line1, candidate.permanent_line2, candidate.permanent_city, candidate.permanent_state, candidate.permanent_pincode, candidate.permanent_country].filter(Boolean).join(", ")}
+              />
             </div>
 
             <SectionDivider>Employment Information</SectionDivider>
@@ -832,11 +843,42 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
         <Input label="Current Company Details" value={form.current_company_details} onChange={set("current_company_details")} className="col-span-2" />
       </div>
 
-      <SectionDivider>Address</SectionDivider>
-      <div className="grid grid-cols-2 gap-2 mb-4">
-        <Input label="Present Address" value={form.present_address} onChange={set("present_address")} />
-        <Input label="Permanent Address" value={form.permanent_address} onChange={set("permanent_address")} />
+      <SectionDivider>Present Address</SectionDivider>
+      <div className="grid grid-cols-3 gap-2 mb-2">
+        <Input label="Address Line 1" value={form.present_line1} onChange={set("present_line1")} />
+        <Input label="Address Line 2" value={form.present_line2} onChange={set("present_line2")} />
+        <Input label="City" value={form.present_city} onChange={set("present_city")} />
+        <Input label="State" value={form.present_state} onChange={set("present_state")} />
+        <Input
+          label="Pincode" value={form.present_pincode} maxLength={6}
+          onChange={(e) => setForm({ ...form, present_pincode: e.target.value.replace(/\D/g, "") })}
+          error={formatError(form.present_pincode, PINCODE_REGEX, "Must be 6 digits")}
+        />
+        <Input label="Country" value={form.present_country} onChange={set("present_country")} />
       </div>
+
+      <SectionDivider>Permanent Address</SectionDivider>
+      <div className="mb-2">
+        <Checkbox
+          label="Same as Present Address"
+          checked={!!form.same_as_present}
+          onChange={(e) => setForm({ ...form, same_as_present: e.target.checked })}
+        />
+      </div>
+      {!form.same_as_present && (
+        <div className="grid grid-cols-3 gap-2 mb-4">
+          <Input label="Address Line 1" value={form.permanent_line1} onChange={set("permanent_line1")} />
+          <Input label="Address Line 2" value={form.permanent_line2} onChange={set("permanent_line2")} />
+          <Input label="City" value={form.permanent_city} onChange={set("permanent_city")} />
+          <Input label="State" value={form.permanent_state} onChange={set("permanent_state")} />
+          <Input
+            label="Pincode" value={form.permanent_pincode} maxLength={6}
+            onChange={(e) => setForm({ ...form, permanent_pincode: e.target.value.replace(/\D/g, "") })}
+            error={formatError(form.permanent_pincode, PINCODE_REGEX, "Must be 6 digits")}
+          />
+          <Input label="Country" value={form.permanent_country} onChange={set("permanent_country")} />
+        </div>
+      )}
 
       <SectionDivider>Employment Information</SectionDivider>
       <div className="grid grid-cols-3 gap-2 mb-4">

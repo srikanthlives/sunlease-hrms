@@ -1435,12 +1435,31 @@ class Candidate(Base):
     dl_issue_date = Column(Date)
     dl_expiry_date = Column(Date)
 
-    # Free-text addresses (unlike Employee's structured Address table, a
-    # candidate has no employee_id to hang a structured row off yet) -
-    # copied verbatim into a PRESENT/PERMANENT Address row on conversion
-    # (recruitment_service.convert_to_employee).
+    # Legacy free-text addresses - superseded by the structured fields
+    # below (same line1/line2/city/state/pincode/country shape as
+    # Employee's own Address table, blueprint §4.1), kept only because
+    # migrate.py never drops columns; no longer read or written.
     present_address = Column(Text)
     permanent_address = Column(Text)
+
+    # Structured, mirroring Employee's AddressStep/Address table exactly -
+    # a candidate has no employee_id to hang an actual Address row off yet,
+    # so these stay flattened on Candidate and are copied into real PRESENT/
+    # PERMANENT Address rows only on conversion
+    # (recruitment_service.convert_to_employee).
+    present_line1 = Column(String(255))
+    present_line2 = Column(String(255))
+    present_city = Column(String(100))
+    present_state = Column(String(100))
+    present_pincode = Column(String(20))
+    present_country = Column(String(100))
+    same_as_present = Column(Boolean, default=False)
+    permanent_line1 = Column(String(255))
+    permanent_line2 = Column(String(255))
+    permanent_city = Column(String(100))
+    permanent_state = Column(String(100))
+    permanent_pincode = Column(String(20))
+    permanent_country = Column(String(100))
 
     applied_designation_id = Column(Integer, ForeignKey("designations.id"), nullable=False)
     applied_employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=False)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, SectionDivider, StatusBadge, formatAadhaar, formatDate } from "../components/ui";
@@ -73,6 +73,18 @@ export default function EmployeeWizard() {
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoUploading, setPhotoUploading] = useState(false);
 
+  // Tracks whether any real data has ever been persisted for this draft -
+  // either saved in this session, or already present from a prior one
+  // (detected on first load below). A brand-new draft (created the instant
+  // "+ New Employee" is clicked, before anything is typed - see
+  // Employees.jsx::createDraft) has nothing persisted yet, so leaving the
+  // wizard via the browser Back button - which unmounts this component
+  // without going through the explicit Cancel button - should silently
+  // discard it instead of leaving an empty DRAFT-N row behind.
+  const savedAnythingRef = useRef(false);
+  const hasCheckedInitialDataRef = useRef(false);
+  const deletingRef = useRef(false);
+
   const steps = dlRequirement.show ? [...BASE_STEPS, "Driving Licence", "Review & Submit"] : [...BASE_STEPS, "Review & Submit"];
   const STEP_DRIVING_LICENCE = dlRequirement.show ? BASE_STEPS.length : -1;
   const STEP_REVIEW = steps.length - 1;
@@ -85,6 +97,14 @@ export default function EmployeeWizard() {
       setEmployment(res.data.episode);
       setDrivingLicence(res.data.driving_licence || {});
       if (res.data.employee.has_photo) loadPhoto(); else setPhotoUrl(null);
+      // A fresh draft is created with first_name="" (Employees.jsx::createDraft /
+      // employees.py::create_draft) - a non-empty name on first load means this
+      // draft already has real saved data from a prior session, so leaving via
+      // Back must not auto-discard it.
+      if (!hasCheckedInitialDataRef.current) {
+        hasCheckedInitialDataRef.current = true;
+        if (res.data.employee.first_name || res.data.employee.last_name) savedAnythingRef.current = true;
+      }
     });
   }
 
@@ -102,6 +122,7 @@ export default function EmployeeWizard() {
       const form = new FormData();
       form.append("file", file);
       await client.put(`/employees/${episodeId}/photo`, form);
+      savedAnythingRef.current = true;
       loadDetail();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -151,6 +172,7 @@ export default function EmployeeWizard() {
     setError("");
     try {
       const res = await client[method](`/employees/${episodeId}${path}`, payload);
+      savedAnythingRef.current = true;
       loadDetail();
       if (res.data?.submitted_for_approval) {
         setBanner("Submitted for approval — this change won't take effect until an Approver reviews it (see Change Requests).");
@@ -174,6 +196,7 @@ export default function EmployeeWizard() {
         percentage: Number(allocation.percentage),
         effective_from: allocation.effective_from,
       });
+      savedAnythingRef.current = true;
       setAllocation({ cost_center_id: "", project_id: "", percentage: "", effective_from: allocation.effective_from });
       loadDetail();
     } catch (err) {
@@ -201,6 +224,7 @@ export default function EmployeeWizard() {
     setDependentError("");
     try {
       await client.post(`/employees/${episodeId}/dependents`, dependent);
+      savedAnythingRef.current = true;
       setDependent({ name: "" });
       loadDetail();
     } catch (err) {
@@ -231,6 +255,7 @@ export default function EmployeeWizard() {
         ...nominee,
         percentage: nominee.percentage ? Number(nominee.percentage) : null,
       });
+      savedAnythingRef.current = true;
       setNominee({ name: "" });
       loadDetail();
     } catch (err) {
@@ -262,6 +287,7 @@ export default function EmployeeWizard() {
       form.append("document_type_id", documentTypeId);
       form.append("file", file);
       await client.post(`/employees/${episodeId}/documents`, form);
+      savedAnythingRef.current = true;
       loadRequiredDocs();
     } catch (err) {
       setDocError(apiErrorMessage(err));
@@ -338,13 +364,32 @@ export default function EmployeeWizard() {
     setCancelling(true);
     setError("");
     try {
+      deletingRef.current = true;
       await client.delete(`/employees/${episodeId}`);
       navigate("/employees");
     } catch (err) {
+      deletingRef.current = false;
       setError(apiErrorMessage(err));
       setCancelling(false);
     }
   }
+
+  // Covers leaving the wizard WITHOUT using the explicit Cancel button
+  // above - most commonly the browser/in-app Back button, which unmounts
+  // this component directly without running any of our own navigation
+  // handlers. If nothing was ever actually saved for this draft (see
+  // savedAnythingRef), silently discard it instead of leaving an empty
+  // DRAFT-N row behind; the backend itself rejects deleting anything past
+  // DRAFT status, so this is a safe no-op once real progress exists.
+  useEffect(() => {
+    return () => {
+      if (!savedAnythingRef.current && !deletingRef.current) {
+        deletingRef.current = true;
+        client.delete(`/employees/${episodeId}`).catch(() => {});
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [episodeId]);
 
   async function goToStep(index) {
     if (index === step) return;

@@ -495,14 +495,17 @@ def convert_to_employee(
         db.add(employee)
         db.flush()
 
-        # Present/Permanent Address, entered as free text on the candidate,
-        # becomes the employee's structured Address rows (one PRESENT, one
-        # PERMANENT) - only for a brand-new Employee; a rejoiner already has
-        # their own Address rows from their prior stint, left untouched.
-        if candidate.present_address:
-            db.add(Address(employee_id=employee.id, address_type="PRESENT", line1=candidate.present_address))
-        if candidate.permanent_address:
-            db.add(Address(employee_id=employee.id, address_type="PERMANENT", line1=candidate.permanent_address))
+        # Present/Permanent Address becomes the employee's own structured
+        # Address rows (one PRESENT, one PERMANENT) - only for a brand-new
+        # Employee; a rejoiner already has their own Address rows from
+        # their prior stint, left untouched.
+        fields = ("line1", "line2", "city", "state", "pincode", "country")
+        present_values = {f: getattr(candidate, f"present_{f}") for f in fields}
+        permanent_values = present_values if candidate.same_as_present else {f: getattr(candidate, f"permanent_{f}") for f in fields}
+        if any(present_values.values()):
+            db.add(Address(employee_id=employee.id, address_type="PRESENT", **present_values))
+        if any(permanent_values.values()):
+            db.add(Address(employee_id=employee.id, address_type="PERMANENT", **permanent_values))
 
     episode = EmploymentEpisode(
         employee_id=employee.id, employee_number=employee_number,

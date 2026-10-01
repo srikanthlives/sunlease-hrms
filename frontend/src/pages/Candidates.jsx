@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { X, Upload, Download, SlidersHorizontal, FileText, ClipboardList, Eye, CheckCircle2 } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
-import { Card, Button, Input, Select, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
+import { Card, Button, Input, Select, Checkbox, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 
 const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED", "WITHDRAWN"];
@@ -11,6 +11,7 @@ const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "
 // frontend and backend don't share a validation layer. Only checked when
 // the field is non-empty (all three are optional).
 const MOBILE_REGEX = /^[6-9][0-9]{9}$/;
+const PINCODE_REGEX = /^[0-9]{6}$/;
 const AADHAAR_REGEX = /^[2-9][0-9]{11}$/;
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
@@ -109,7 +110,9 @@ const EMPTY_FORM = {
   mobile_number: "", alternate_mobile_number: "", personal_email: "", educational_qualification: "",
   aadhaar: "", aadhaar_name: "", aadhaar_dob: "", pan: "", pan_name: "", pan_dob: "",
   current_designation: "", current_company_name: "", current_company_details: "", current_date_of_joining: "", total_experience_years: "",
-  present_address: "", permanent_address: "",
+  present_line1: "", present_line2: "", present_city: "", present_state: "", present_pincode: "", present_country: "",
+  same_as_present: false,
+  permanent_line1: "", permanent_line2: "", permanent_city: "", permanent_state: "", permanent_pincode: "", permanent_country: "",
   applied_designation_id: "", applied_employee_category_id: "",
   applied_cost_center_id: "", applied_project_id: "",
   applied_date: new Date().toISOString().slice(0, 10),
@@ -343,7 +346,9 @@ export default function Candidates() {
     && !formatError(form.mobile_number, MOBILE_REGEX, "x")
     && !formatError(form.alternate_mobile_number, MOBILE_REGEX, "x")
     && !formatError(form.aadhaar, AADHAAR_REGEX, "x")
-    && !formatError(form.pan, PAN_REGEX, "x");
+    && !formatError(form.pan, PAN_REGEX, "x")
+    && !formatError(form.present_pincode, PINCODE_REGEX, "x")
+    && !formatError(form.permanent_pincode, PINCODE_REGEX, "x");
 
   return (
     <div className="space-y-6">
@@ -427,11 +432,42 @@ export default function Candidates() {
             <Input label="Current Company Details" value={form.current_company_details} onChange={(e) => setForm({ ...form, current_company_details: e.target.value })} className="col-span-2" />
           </div>
 
-          <SectionDivider>Address</SectionDivider>
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            <Input label="Present Address" value={form.present_address} onChange={(e) => setForm({ ...form, present_address: e.target.value })} />
-            <Input label="Permanent Address" value={form.permanent_address} onChange={(e) => setForm({ ...form, permanent_address: e.target.value })} />
+          <SectionDivider>Present Address</SectionDivider>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <Input label="Address Line 1" value={form.present_line1} onChange={(e) => setForm({ ...form, present_line1: e.target.value })} />
+            <Input label="Address Line 2" value={form.present_line2} onChange={(e) => setForm({ ...form, present_line2: e.target.value })} />
+            <Input label="City" value={form.present_city} onChange={(e) => setForm({ ...form, present_city: e.target.value })} />
+            <Input label="State" value={form.present_state} onChange={(e) => setForm({ ...form, present_state: e.target.value })} />
+            <Input
+              label="Pincode" value={form.present_pincode} maxLength={6}
+              onChange={(e) => setForm({ ...form, present_pincode: e.target.value.replace(/\D/g, "") })}
+              error={formatError(form.present_pincode, PINCODE_REGEX, "Must be 6 digits")}
+            />
+            <Input label="Country" value={form.present_country} onChange={(e) => setForm({ ...form, present_country: e.target.value })} />
           </div>
+
+          <SectionDivider>Permanent Address</SectionDivider>
+          <div className="mb-2">
+            <Checkbox
+              label="Same as Present Address"
+              checked={!!form.same_as_present}
+              onChange={(e) => setForm({ ...form, same_as_present: e.target.checked })}
+            />
+          </div>
+          {!form.same_as_present && (
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              <Input label="Address Line 1" value={form.permanent_line1} onChange={(e) => setForm({ ...form, permanent_line1: e.target.value })} />
+              <Input label="Address Line 2" value={form.permanent_line2} onChange={(e) => setForm({ ...form, permanent_line2: e.target.value })} />
+              <Input label="City" value={form.permanent_city} onChange={(e) => setForm({ ...form, permanent_city: e.target.value })} />
+              <Input label="State" value={form.permanent_state} onChange={(e) => setForm({ ...form, permanent_state: e.target.value })} />
+              <Input
+                label="Pincode" value={form.permanent_pincode} maxLength={6}
+                onChange={(e) => setForm({ ...form, permanent_pincode: e.target.value.replace(/\D/g, "") })}
+                error={formatError(form.permanent_pincode, PINCODE_REGEX, "Must be 6 digits")}
+              />
+              <Input label="Country" value={form.permanent_country} onChange={(e) => setForm({ ...form, permanent_country: e.target.value })} />
+            </div>
+          )}
 
           <SectionDivider>Employment Information</SectionDivider>
           <div className="grid grid-cols-3 gap-2 mb-4">
