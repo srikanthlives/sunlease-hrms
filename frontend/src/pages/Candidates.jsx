@@ -59,6 +59,16 @@ const ALL_COLUMNS = [
   { key: "mobile_number", header: "Mobile", sortable: true, fixedWidth: 120, defaultVisible: true, render: (r) => r.mobile_number || "—" },
   { key: "status", header: "Status", sortable: true, fixedWidth: 130, defaultVisible: true, render: (r) => <StatusBadge status={r.status} /> },
   {
+    key: "interest_status", header: "Interested", sortable: true, fixedWidth: 150, defaultVisible: true,
+    tooltip: (r) => r.interest_status === "NOT_INTERESTED" ? `Not Interested — last confirmed ${formatDate(r.not_interested_date)}` : "Interested",
+    render: (r) => r.interest_status === "NOT_INTERESTED" ? (
+      <span className="inline-flex flex-col leading-tight">
+        <StatusBadge status="NOT_INTERESTED" />
+        <span className="text-[10px] text-ink/40 mt-0.5">{formatDate(r.not_interested_date)}</span>
+      </span>
+    ) : <StatusBadge status="INTERESTED" />,
+  },
+  {
     key: "documents", header: "Documents", sortable: true, defaultVisible: true, fixedWidth: 110,
     sortAccessor: (r) => r.documents_uploaded_count,
     render: (r) => `${r.documents_uploaded_count}`, // overridden below with the actual button (needs component state)
@@ -99,6 +109,7 @@ const EMPTY_FORM = {
   mobile_number: "", alternate_mobile_number: "", personal_email: "", educational_qualification: "",
   aadhaar: "", aadhaar_name: "", aadhaar_dob: "", pan: "", pan_name: "", pan_dob: "",
   current_designation: "", current_company_name: "", current_company_details: "", current_date_of_joining: "", total_experience_years: "",
+  present_address: "", permanent_address: "",
   applied_designation_id: "", applied_employee_category_id: "",
   applied_cost_center_id: "", applied_project_id: "",
   applied_date: new Date().toISOString().slice(0, 10),
@@ -141,6 +152,7 @@ export default function Candidates() {
     }
   }
   const [statusFilter, setStatusFilter] = useState("APPROVED");
+  const [interestFilter, setInterestFilter] = useState("");
   const [costCenterFilter, setCostCenterFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -304,22 +316,24 @@ export default function Candidates() {
     // finding who you're looking for matters more than staying within
     // whatever status happened to be selected.
     if (!searchTerm && statusFilter && c.status !== statusFilter) return false;
+    if (interestFilter && c.interest_status !== interestFilter) return false;
     if (costCenterFilter && String(c.applied_cost_center_id) !== costCenterFilter) return false;
     if (projectFilter && String(c.applied_project_id) !== projectFilter) return false;
     if (categoryFilter && String(c.applied_employee_category_id) !== categoryFilter) return false;
     return true;
   });
 
-  const filtersActive = search || statusFilter || costCenterFilter || projectFilter || categoryFilter;
+  const filtersActive = search || statusFilter || interestFilter || costCenterFilter || projectFilter || categoryFilter;
   function clearFilters() {
     setSearch("");
     setStatusFilter("");
+    setInterestFilter("");
     setCostCenterFilter("");
     setProjectFilter("");
     setCategoryFilter("");
   }
 
-  useEffect(() => setPage(1), [search, statusFilter, costCenterFilter, projectFilter, categoryFilter]);
+  useEffect(() => setPage(1), [search, statusFilter, interestFilter, costCenterFilter, projectFilter, categoryFilter]);
   const sortedCandidates = useMemo(() => sortRows(visibleCandidates, ALL_COLUMNS, sort), [visibleCandidates, sort]);
   useEffect(() => setPage(1), [sort]);
   const { pageRows, page: safePage, pageCount, total } = usePagination(sortedCandidates, page, pageSize);
@@ -413,6 +427,12 @@ export default function Candidates() {
             <Input label="Current Company Details" value={form.current_company_details} onChange={(e) => setForm({ ...form, current_company_details: e.target.value })} className="col-span-2" />
           </div>
 
+          <SectionDivider>Address</SectionDivider>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            <Input label="Present Address" value={form.present_address} onChange={(e) => setForm({ ...form, present_address: e.target.value })} />
+            <Input label="Permanent Address" value={form.permanent_address} onChange={(e) => setForm({ ...form, permanent_address: e.target.value })} />
+          </div>
+
           <SectionDivider>Employment Information</SectionDivider>
           <div className="grid grid-cols-3 gap-2 mb-4">
             <Input label="Application Reference Number" value="Auto-generated on save" disabled />
@@ -463,6 +483,13 @@ export default function Candidates() {
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All Statuses</option>
               {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
+            </Select>
+          </div>
+          <div className="w-44">
+            <Select value={interestFilter} onChange={(e) => setInterestFilter(e.target.value)}>
+              <option value="">All (Interested + Not)</option>
+              <option value="INTERESTED">Interested</option>
+              <option value="NOT_INTERESTED">Not Interested</option>
             </Select>
           </div>
           <div className="w-44">

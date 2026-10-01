@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.enums import AuditAction, CandidateStatus, RoleName, TransactionType
 from app.models.models import (
-    Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
+    Address, Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
     DesignationCriteria, DrivingLicenceDetail, Employee, EmploymentEpisode, SelectionCriteria, User,
 )
 from app.services import approval_service, audit_service, document_service, employee_service
@@ -494,6 +494,15 @@ def convert_to_employee(
         )
         db.add(employee)
         db.flush()
+
+        # Present/Permanent Address, entered as free text on the candidate,
+        # becomes the employee's structured Address rows (one PRESENT, one
+        # PERMANENT) - only for a brand-new Employee; a rejoiner already has
+        # their own Address rows from their prior stint, left untouched.
+        if candidate.present_address:
+            db.add(Address(employee_id=employee.id, address_type="PRESENT", line1=candidate.present_address))
+        if candidate.permanent_address:
+            db.add(Address(employee_id=employee.id, address_type="PERMANENT", line1=candidate.permanent_address))
 
     episode = EmploymentEpisode(
         employee_id=employee.id, employee_number=employee_number,

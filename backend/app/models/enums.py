@@ -129,6 +129,18 @@ class CandidateStatus:
     ALL = [APPLIED, PENDING_APPROVAL, APPROVED, REJECTED, CONVERTED, WITHDRAWN]
 
 
+class InterestStatus:
+    """Independent of CandidateStatus - a candidate can go quiet/decline at
+    any pipeline stage (APPLIED through APPROVED), and HR periodically
+    re-contacts NOT_INTERESTED candidates (e.g. monthly), updating
+    Candidate.not_interested_date each time without changing their
+    CandidateStatus. See routers/recruitment.py::set_candidate_interest."""
+    INTERESTED = "INTERESTED"
+    NOT_INTERESTED = "NOT_INTERESTED"
+
+    ALL = [INTERESTED, NOT_INTERESTED]
+
+
 class CriteriaResult:
     PENDING = "PENDING"
     PASS_ = "PASS"

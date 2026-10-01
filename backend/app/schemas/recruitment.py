@@ -33,6 +33,22 @@ class DesignationCriteriaUpdateIn(BaseModel):
     is_active: bool = True
 
 
+class CandidateInterestIn(BaseModel):
+    interest_status: str  # INTERESTED or NOT_INTERESTED
+    # Required when marking NOT_INTERESTED - the date HR last confirmed the
+    # candidate is still not interested (re-sent on every follow-up call,
+    # not just the first one). Ignored when marking back to INTERESTED.
+    not_interested_date: date | None = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.interest_status not in ("INTERESTED", "NOT_INTERESTED"):
+            raise ValueError("interest_status must be INTERESTED or NOT_INTERESTED")
+        if self.interest_status == "NOT_INTERESTED" and not self.not_interested_date:
+            raise ValueError("not_interested_date is required when marking a candidate as Not Interested")
+        return self
+
+
 class CandidateTransferIn(BaseModel):
     applied_cost_center_id: int
     applied_project_id: int
@@ -75,6 +91,9 @@ class CandidateIn(BaseModel):
     dl_issuing_authority: str | None = None
     dl_issue_date: date | None = None
     dl_expiry_date: date | None = None
+
+    present_address: str | None = None
+    permanent_address: str | None = None
 
     applied_designation_id: int
     applied_employee_category_id: int

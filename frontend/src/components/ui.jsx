@@ -36,6 +36,8 @@ const STATUS_STYLES = {
   PASS: "bg-ok/10 text-ok border-ok/30",
   FAIL: "bg-danger/10 text-danger border-danger/30",
   EXCEPTION: "bg-warn/10 text-warn border-warn/30",
+  INTERESTED: "bg-ok/10 text-ok border-ok/30",
+  NOT_INTERESTED: "bg-danger/10 text-danger border-danger/30",
 };
 
 export function StatusBadge({ status }) {

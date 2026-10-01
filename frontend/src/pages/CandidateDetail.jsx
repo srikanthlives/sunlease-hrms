@@ -24,6 +24,7 @@ const EDIT_FIELDS = [
   "mobile_number", "alternate_mobile_number", "personal_email", "educational_qualification",
   "aadhaar", "aadhaar_name", "aadhaar_dob", "pan", "pan_name", "pan_dob",
   "current_designation", "current_company_name", "current_company_details", "current_date_of_joining", "total_experience_years",
+  "present_address", "permanent_address",
   "dl_licence_number", "dl_badge_number", "dl_vehicle_class", "dl_issuing_authority", "dl_issue_date", "dl_expiry_date",
   "applied_designation_id", "applied_employee_category_id", "applied_cost_center_id", "applied_project_id",
   "applied_date", "source", "remarks",
@@ -51,6 +52,8 @@ export default function CandidateDetail() {
   const [testedOnByCriteria, setTestedOnByCriteria] = useState({});
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferForm, setTransferForm] = useState({ applied_cost_center_id: "", applied_project_id: "", remarks: "" });
+  const [notInterestedDate, setNotInterestedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [interestBusy, setInterestBusy] = useState(false);
 
   function reload() {
     client.get(`/recruitment/candidates/${candidateId}`)
@@ -72,6 +75,26 @@ export default function CandidateDetail() {
       .catch(() => {});
   }
   useEffect(reload, [candidateId]);
+
+  useEffect(() => {
+    if (candidate?.not_interested_date) setNotInterestedDate(candidate.not_interested_date);
+  }, [candidate?.not_interested_date]);
+
+  async function setInterest(interest_status) {
+    setError("");
+    setInterestBusy(true);
+    try {
+      await client.post(`/recruitment/candidates/${candidateId}/interest-status`, {
+        interest_status,
+        not_interested_date: interest_status === "NOT_INTERESTED" ? notInterestedDate : null,
+      });
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setInterestBusy(false);
+    }
+  }
 
   useEffect(() => {
     client.get("/designations").then((res) => setDesignations(res.data));
@@ -403,7 +426,8 @@ export default function CandidateDetail() {
             {candidate.first_name} {candidate.last_name} · {candidate.reference_number}
           </h1>
           <p className="text-sm text-ink/50 mt-1">
-            Applied for {candidate.designation_name} at {candidate.cost_center_name} · <StatusBadge status={candidate.status} />
+            Applied for {candidate.designation_name} at {candidate.cost_center_name} · <StatusBadge status={candidate.status} />{" "}
+            <StatusBadge status={candidate.interest_status} />
           </p>
         </div>
         <Button variant="outline" onClick={() => navigate("/recruitment/candidates")}>Back to Candidates</Button>
@@ -490,6 +514,39 @@ export default function CandidateDetail() {
       </Card>
 
       <Card>
+        <h2 className="text-sm font-semibold text-ink mb-3">Interest</h2>
+        <div className="flex flex-wrap items-end gap-2">
+          {candidate.interest_status === "NOT_INTERESTED" ? (
+            <>
+              <Input
+                type="date" label="Not Interested as of" value={notInterestedDate}
+                onChange={(e) => setNotInterestedDate(e.target.value)}
+              />
+              <Button variant="outline" onClick={() => setInterest("NOT_INTERESTED")} disabled={interestBusy || !notInterestedDate}>
+                Update Date
+              </Button>
+              <Button variant="accent" onClick={() => setInterest("INTERESTED")} disabled={interestBusy}>Mark Interested Again</Button>
+            </>
+          ) : (
+            <>
+              <Input
+                type="date" label="Date" value={notInterestedDate}
+                onChange={(e) => setNotInterestedDate(e.target.value)}
+              />
+              <Button variant="danger" onClick={() => setInterest("NOT_INTERESTED")} disabled={interestBusy || !notInterestedDate}>
+                Mark Not Interested
+              </Button>
+            </>
+          )}
+        </div>
+        <p className="text-xs text-ink/40 mt-2">
+          {candidate.interest_status === "NOT_INTERESTED"
+            ? "We periodically call back candidates marked Not Interested — update the date each time they confirm they're still not interested."
+            : "Tracked independently of the pipeline status above — a candidate can go quiet or decline at any stage."}
+        </p>
+      </Card>
+
+      <Card>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-ink">Candidate Details</h2>
           {!isTerminal && !editing && <Button variant="outline" size="sm" onClick={startEdit}>Edit</Button>}
@@ -536,6 +593,12 @@ export default function CandidateDetail() {
               <Field label="Date of Joining (Current Company)" value={formatDate(candidate.current_date_of_joining)} />
               <Field label="Total Experience" value={candidate.total_experience_years != null ? `${candidate.total_experience_years} years` : null} />
               <Field label="Current Company Details" value={candidate.current_company_details} />
+            </div>
+
+            <SectionDivider>Address</SectionDivider>
+            <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+              <Field label="Present Address" value={candidate.present_address} />
+              <Field label="Permanent Address" value={candidate.permanent_address} />
             </div>
 
             <SectionDivider>Employment Information</SectionDivider>
@@ -777,6 +840,12 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
         <Input type="date" label="Date of Joining (Current Company)" value={form.current_date_of_joining} onChange={set("current_date_of_joining")} />
         <Input type="number" step="0.1" min="0" max="60" placeholder="e.g. 5.3" label="Total Experience (years)" value={form.total_experience_years} onChange={set("total_experience_years")} />
         <Input label="Current Company Details" value={form.current_company_details} onChange={set("current_company_details")} className="col-span-2" />
+      </div>
+
+      <SectionDivider>Address</SectionDivider>
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        <Input label="Present Address" value={form.present_address} onChange={set("present_address")} />
+        <Input label="Permanent Address" value={form.permanent_address} onChange={set("permanent_address")} />
       </div>
 
       <SectionDivider>Employment Information</SectionDivider>

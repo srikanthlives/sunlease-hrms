@@ -14,7 +14,7 @@ from app.models.models import (
     DesignationCriteria, Project, SelectionCriteria, User,
 )
 from app.schemas.recruitment import (
-    CandidateIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
+    CandidateIn, CandidateInterestIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
 from app.services import audit_service, candidate_bulk_import_service, document_service, employee_service, licence_service, permission_service, recruitment_service
@@ -175,6 +175,7 @@ def _candidate_summary_dict(c: Candidate) -> dict:
         "applied_employee_category_id": c.applied_employee_category_id,
         "applied_employee_category_name": c.employee_category.name if c.employee_category else None,
         "applied_date": c.applied_date, "status": c.status,
+        "interest_status": c.interest_status, "not_interested_date": c.not_interested_date,
         "mobile_number": c.mobile_number, "aadhaar": c.aadhaar, "pan": c.pan, "dl_licence_number": c.dl_licence_number,
         # Extra list-view columns (hidden by default in the UI).
         "gender": c.gender, "date_of_birth": c.date_of_birth, "alternate_mobile_number": c.alternate_mobile_number,
@@ -195,6 +196,7 @@ def _candidate_detail_dict(db: Session, c: Candidate, user: User | None = None) 
         "current_designation": c.current_designation, "current_company_name": c.current_company_name,
         "current_company_details": c.current_company_details, "current_date_of_joining": c.current_date_of_joining,
         "total_experience_years": c.total_experience_years,
+        "present_address": c.present_address, "permanent_address": c.permanent_address,
         "aadhaar": c.aadhaar, "aadhaar_name": c.aadhaar_name, "aadhaar_dob": c.aadhaar_dob,
         "pan": c.pan, "pan_name": c.pan_name, "pan_dob": c.pan_dob,
         "dl_licence_number": c.dl_licence_number, "dl_badge_number": c.dl_badge_number,
@@ -360,6 +362,24 @@ def disqualify_candidate(candidate_id: int, db: Session = Depends(get_db), user:
     recruitment_service.disqualify_candidate(db, candidate, user)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/candidates/{candidate_id}/interest-status", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def set_candidate_interest(candidate_id: int, payload: CandidateInterestIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """A candidate going quiet/declining is tracked independently of
+    CandidateStatus - it can happen at any pipeline stage, and isn't an
+    approval-gated identity field, so this applies directly (no
+    ChangeRequest) even on an APPROVED candidate. Marking NOT_INTERESTED
+    always (re-)sets not_interested_date to the date supplied - HR calls
+    these candidates back periodically and bumps the date each time they
+    confirm they're still not interested."""
+    candidate = _get_candidate(db, candidate_id)
+    candidate.interest_status = payload.interest_status
+    candidate.not_interested_date = payload.not_interested_date if payload.interest_status == "NOT_INTERESTED" else None
+    db.add(candidate)
+    audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user, new_value=f"interest_status={payload.interest_status}")
+    db.commit()
+    return _candidate_detail_dict(db, candidate, user)
 
 
 @router.post("/candidates/{candidate_id}/requalify", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

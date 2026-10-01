@@ -1435,6 +1435,13 @@ class Candidate(Base):
     dl_issue_date = Column(Date)
     dl_expiry_date = Column(Date)
 
+    # Free-text addresses (unlike Employee's structured Address table, a
+    # candidate has no employee_id to hang a structured row off yet) -
+    # copied verbatim into a PRESENT/PERMANENT Address row on conversion
+    # (recruitment_service.convert_to_employee).
+    present_address = Column(Text)
+    permanent_address = Column(Text)
+
     applied_designation_id = Column(Integer, ForeignKey("designations.id"), nullable=False)
     applied_employee_category_id = Column(Integer, ForeignKey("employee_categories.id"), nullable=False)
     applied_cost_center_id = Column(Integer, ForeignKey("cost_centers.id"), nullable=False)
@@ -1456,6 +1463,13 @@ class Candidate(Base):
     source = Column(String(150))
     status = Column(String(20), default="APPLIED")  # CandidateStatus
     remarks = Column(Text)
+
+    # Independent of status (blueprint-adjacent addition) - a candidate can
+    # lose interest at any pipeline stage; HR periodically re-contacts
+    # NOT_INTERESTED candidates and bumps not_interested_date each time they
+    # confirm they're still not interested (see InterestStatus, enums.py).
+    interest_status = Column(String(20), default="INTERESTED")
+    not_interested_date = Column(Date)
 
     converted_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     converted_episode_id = Column(Integer, ForeignKey("employment_episodes.id"), nullable=True)
