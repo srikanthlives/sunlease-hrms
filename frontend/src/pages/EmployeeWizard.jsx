@@ -42,6 +42,13 @@ const emptyAddress = {
 export default function EmployeeWizard() {
   const { episodeId } = useParams();
   const navigate = useNavigate();
+  // "new" is a sentinel route param (see Employees.jsx::createDraft) - no
+  // Employee/EmploymentEpisode exists yet. Step 1 (Personal Information)
+  // runs entirely in local state until Save & Continue actually creates
+  // the draft (see saveCurrentStep's step 0 branch below) with that data
+  // already attached, instead of an empty placeholder row existing from
+  // the moment the wizard is opened.
+  const isNew = episodeId === "new";
   const [step, setStep] = useState(0);
   const [error, setError] = useState("");
   const [banner, setBanner] = useState("");
@@ -140,8 +147,20 @@ export default function EmployeeWizard() {
   }
 
   useEffect(() => {
-    loadDetail();
-    loadDrivingLicenceRequirement();
+    if (isNew) {
+      // Nothing exists server-side yet - render Step 1 against empty local
+      // state instead of fetching (there's no episode to GET).
+      setDetail({
+        employee: {}, episode: { status: "DRAFT" }, address: {}, driving_licence: {},
+        allocations: [], assignments: [], statutory: [], bank_accounts: [], dependents: [], nominees: [],
+      });
+      setPersonal({});
+      setAddress(emptyAddress);
+      setPhotoUrl(null);
+    } else {
+      loadDetail();
+      loadDrivingLicenceRequirement();
+    }
     Promise.all([
       client.get("/cost-centers"),
       client.get("/departments"),
@@ -177,6 +196,33 @@ export default function EmployeeWizard() {
       if (res.data?.submitted_for_approval) {
         setBanner("Submitted for approval — this change won't take effect until an Approver reviews it (see Change Requests).");
       }
+      return true;
+    } catch (err) {
+      setError(apiErrorMessage(err));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Step 0's first-ever save while isNew: creates the Employee/
+  // EmploymentEpisode AND persists Personal Information in one backend
+  // call (POST /employees/draft, now accepting the Personal Info payload
+  // directly - see employees.py::create_draft), then swaps the URL over
+  // to the real episode id. React Router keeps this component mounted
+  // across that param change (same route, same element), so step/form
+  // state carries over untouched - the [episodeId] effect above simply
+  // re-fires and loads the freshly-created episode normally.
+  async function createDraftFromPersonal() {
+    setSaving(true);
+    setError("");
+    try {
+      const res = await client.post("/employees/draft", {
+        ...personal,
+        total_experience_years: personal.total_experience_years === "" || personal.total_experience_years == null ? null : Number(personal.total_experience_years),
+      });
+      savedAnythingRef.current = true;
+      navigate(`/employees/${res.data.episode_id}/wizard`, { replace: true });
       return true;
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -324,6 +370,7 @@ export default function EmployeeWizard() {
   // required documents) is opened directly instead of via Next.
   async function saveCurrentStep() {
     if (step === 0) {
+      if (isNew) return createDraftFromPersonal();
       return save("/personal", {
         ...personal,
         total_experience_years: personal.total_experience_years === "" || personal.total_experience_years == null ? null : Number(personal.total_experience_years),
@@ -361,6 +408,8 @@ export default function EmployeeWizard() {
 
   async function cancelDraft() {
     if (!window.confirm("Discard this draft? Nothing entered in this session will be saved, and this cannot be undone.")) return;
+    // Nothing has been created server-side yet while isNew - just leave.
+    if (isNew) { navigate("/employees"); return; }
     setCancelling(true);
     setError("");
     try {
@@ -374,16 +423,17 @@ export default function EmployeeWizard() {
     }
   }
 
-  // Covers leaving the wizard WITHOUT using the explicit Cancel button
-  // above - most commonly the browser/in-app Back button, which unmounts
-  // this component directly without running any of our own navigation
-  // handlers. If nothing was ever actually saved for this draft (see
-  // savedAnythingRef), silently discard it instead of leaving an empty
-  // DRAFT-N row behind; the backend itself rejects deleting anything past
-  // DRAFT status, so this is a safe no-op once real progress exists.
+  // Belt-and-braces fallback for leaving the wizard WITHOUT using the
+  // explicit Cancel button above (most commonly the browser/in-app Back
+  // button, which unmounts this component directly without running any of
+  // our own navigation handlers). With the "new" sentinel above, this
+  // should rarely have anything to do any more - no draft row exists at
+  // all until Step 1 is actually saved - but it's kept as a safety net
+  // for any other path that still ends up with an unsaved DRAFT episode.
+  // While isNew there's nothing server-side to delete yet.
   useEffect(() => {
     return () => {
-      if (!savedAnythingRef.current && !deletingRef.current) {
+      if (!isNew && !savedAnythingRef.current && !deletingRef.current) {
         deletingRef.current = true;
         client.delete(`/employees/${episodeId}`).catch(() => {});
       }
@@ -456,12 +506,16 @@ export default function EmployeeWizard() {
                   <span className="text-[10px] text-ink/30 text-center px-1">No Photo</span>
                 )}
               </div>
-              <label>
-                <span className={`inline-block px-3 py-1.5 rounded-md border border-ink/15 text-sm cursor-pointer hover:bg-ink/5 ${photoUploading ? "opacity-50 pointer-events-none" : ""}`}>
-                  {photoUploading ? "Uploading…" : photoUrl ? "Replace Photo" : "Upload Photo"}
-                </span>
-                <input type="file" accept="image/*" className="hidden" onChange={(e) => uploadPhoto(e.target.files[0])} />
-              </label>
+              {isNew ? (
+                <p className="text-xs text-ink/40">Save & Continue below first, then a photo can be uploaded.</p>
+              ) : (
+                <label>
+                  <span className={`inline-block px-3 py-1.5 rounded-md border border-ink/15 text-sm cursor-pointer hover:bg-ink/5 ${photoUploading ? "opacity-50 pointer-events-none" : ""}`}>
+                    {photoUploading ? "Uploading…" : photoUrl ? "Replace Photo" : "Upload Photo"}
+                  </span>
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => uploadPhoto(e.target.files[0])} />
+                </label>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Input label="First Name" value={personal.first_name || ""} onChange={(e) => setPersonal({ ...personal, first_name: e.target.value })} />

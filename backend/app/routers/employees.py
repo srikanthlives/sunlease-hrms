@@ -91,8 +91,15 @@ def _save_or_request(db: Session, episode: EmploymentEpisode, transaction_type: 
 
 
 @router.post("/draft", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
-def create_draft(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    employee = Employee(first_name="", last_name="")
+def create_draft(payload: PersonalInfoStep, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Creates the draft Employee/EmploymentEpisode AND saves Personal
+    Information in a single call - the wizard only calls this once the
+    user has actually filled in Step 1 and clicked Save & Continue (see
+    EmployeeWizard.jsx's "new" episodeId sentinel), not the instant "+ New
+    Employee" is clicked. That way no empty placeholder row is ever
+    created for someone who opens the wizard and immediately leaves
+    without entering anything - there's nothing to clean up."""
+    employee = Employee(**payload.model_dump())
     db.add(employee)
     db.flush()
 

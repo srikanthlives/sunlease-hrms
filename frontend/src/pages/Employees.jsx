@@ -102,7 +102,6 @@ export default function Employees() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [creating, setCreating] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -135,17 +134,14 @@ export default function Employees() {
     localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify([...visibleColumns]));
   }, [visibleColumns]);
 
-  async function createDraft() {
-    setCreating(true);
-    setError("");
-    try {
-      const res = await client.post("/employees/draft");
-      navigate(`/employees/${res.data.episode_id}/wizard`);
-    } catch (err) {
-      setError(apiErrorMessage(err));
-    } finally {
-      setCreating(false);
-    }
+  // No draft row is created here any more - the wizard's "new" sentinel
+  // route holds Step 1 entirely in local state and only calls
+  // POST /employees/draft (creating the Employee + EmploymentEpisode AND
+  // saving Personal Information in one shot) once the user actually
+  // clicks Save & Continue. Opening the wizard and leaving immediately no
+  // longer touches the database at all - see EmployeeWizard.jsx.
+  function createDraft() {
+    navigate("/employees/new/wizard");
   }
 
   async function downloadTemplate() {
@@ -289,7 +285,7 @@ export default function Employees() {
           <Button variant="outline" onClick={() => setBulkOpen(true)} className="gap-1.5">
             <Upload size={14} /> Bulk Upload
           </Button>
-          <Button onClick={createDraft} disabled={creating}>
+          <Button onClick={createDraft}>
             + New Employee
           </Button>
         </div>
