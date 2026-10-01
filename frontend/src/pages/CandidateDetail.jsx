@@ -54,6 +54,7 @@ export default function CandidateDetail() {
   const [transferForm, setTransferForm] = useState({ applied_cost_center_id: "", applied_project_id: "", remarks: "" });
   const [notInterestedDate, setNotInterestedDate] = useState(new Date().toISOString().slice(0, 10));
   const [interestBusy, setInterestBusy] = useState(false);
+  const [interestOpen, setInterestOpen] = useState(false);
 
   function reload() {
     client.get(`/recruitment/candidates/${candidateId}`)
@@ -88,6 +89,7 @@ export default function CandidateDetail() {
         interest_status,
         not_interested_date: interest_status === "NOT_INTERESTED" ? notInterestedDate : null,
       });
+      setInterestOpen(false);
       reload();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -428,6 +430,9 @@ export default function CandidateDetail() {
           <p className="text-sm text-ink/50 mt-1">
             Applied for {candidate.designation_name} at {candidate.cost_center_name} · <StatusBadge status={candidate.status} />{" "}
             <StatusBadge status={candidate.interest_status} />
+            {candidate.interest_status === "NOT_INTERESTED" && (
+              <span className="text-xs text-ink/40"> (as of {formatDate(candidate.not_interested_date)})</span>
+            )}
           </p>
         </div>
         <Button variant="outline" onClick={() => navigate("/recruitment/candidates")}>Back to Candidates</Button>
@@ -475,6 +480,9 @@ export default function CandidateDetail() {
           {!isTerminal && (
             <Button variant="danger" onClick={disqualifyCandidate} disabled={busy}>Disqualify Candidate</Button>
           )}
+          <Button variant="outline" onClick={() => setInterestOpen((o) => !o)} disabled={busy}>
+            {candidate.interest_status === "NOT_INTERESTED" ? "Update Interest" : "Mark Not Interested"}
+          </Button>
           {isTerminal && (
             <Button variant="accent" onClick={requalifyCandidate} disabled={busy}>Requalify Candidate</Button>
           )}
@@ -511,39 +519,21 @@ export default function CandidateDetail() {
             </div>
           </div>
         )}
-      </Card>
-
-      <Card>
-        <h2 className="text-sm font-semibold text-ink mb-3">Interest</h2>
-        <div className="flex flex-wrap items-end gap-2">
-          {candidate.interest_status === "NOT_INTERESTED" ? (
-            <>
-              <Input
-                type="date" label="Not Interested as of" value={notInterestedDate}
-                onChange={(e) => setNotInterestedDate(e.target.value)}
-              />
-              <Button variant="outline" onClick={() => setInterest("NOT_INTERESTED")} disabled={interestBusy || !notInterestedDate}>
-                Update Date
-              </Button>
+        {interestOpen && (
+          <div className="mt-4 border-t border-ink/10 pt-4 flex flex-wrap items-end gap-2">
+            <Input
+              type="date" label={candidate.interest_status === "NOT_INTERESTED" ? "Not Interested as of" : "Date"}
+              value={notInterestedDate} onChange={(e) => setNotInterestedDate(e.target.value)}
+            />
+            <Button variant="danger" onClick={() => setInterest("NOT_INTERESTED")} disabled={interestBusy || !notInterestedDate}>
+              {candidate.interest_status === "NOT_INTERESTED" ? "Update Date" : "Mark Not Interested"}
+            </Button>
+            {candidate.interest_status === "NOT_INTERESTED" && (
               <Button variant="accent" onClick={() => setInterest("INTERESTED")} disabled={interestBusy}>Mark Interested Again</Button>
-            </>
-          ) : (
-            <>
-              <Input
-                type="date" label="Date" value={notInterestedDate}
-                onChange={(e) => setNotInterestedDate(e.target.value)}
-              />
-              <Button variant="danger" onClick={() => setInterest("NOT_INTERESTED")} disabled={interestBusy || !notInterestedDate}>
-                Mark Not Interested
-              </Button>
-            </>
-          )}
-        </div>
-        <p className="text-xs text-ink/40 mt-2">
-          {candidate.interest_status === "NOT_INTERESTED"
-            ? "We periodically call back candidates marked Not Interested — update the date each time they confirm they're still not interested."
-            : "Tracked independently of the pipeline status above — a candidate can go quiet or decline at any stage."}
-        </p>
+            )}
+            <Button variant="outline" onClick={() => setInterestOpen(false)} disabled={interestBusy}>Cancel</Button>
+          </div>
+        )}
       </Card>
 
       <Card>
