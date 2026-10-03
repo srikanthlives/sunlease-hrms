@@ -595,7 +595,7 @@ export default function Candidates() {
           <div className="bg-white rounded-lg p-5 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-ink mb-1">Bulk Upload Candidates</h3>
             <p className="text-xs text-ink/50 mb-4">
-              Each row creates a new candidate — same as "New Candidate" — with Personal Info, Identity Documents,
+              Each row creates a new candidate — same as "New Candidate" — with Personal Info, Address, Identity Documents,
               Current Experience, Applied Designation/Cost Center/Category/Project, and Driving Licence details
               filled in. Documents and Selection Criteria are completed afterwards per-candidate on the Candidate
               Detail page. The upload is all-or-nothing: if any row has an error (for example an Aadhaar/PAN/Driving Licence Number

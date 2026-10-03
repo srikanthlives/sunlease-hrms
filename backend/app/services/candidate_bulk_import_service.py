@@ -18,7 +18,7 @@ from openpyxl.styles import Font
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.validators import validate_aadhaar, validate_mobile, validate_pan
+from app.core.validators import validate_aadhaar, validate_mobile, validate_pan, validate_pincode
 from app.models.enums import AuditAction
 from app.models.models import Candidate, CostCenter, Designation, EmployeeCategory, Project, User
 from app.services import audit_service, permission_service, recruitment_service
@@ -51,6 +51,19 @@ COLUMNS = [
     ("dl_issuing_authority", "Driving Licence Issuing Authority"),
     ("dl_issue_date", "Driving Licence Issue Date (YYYY-MM-DD)"),
     ("dl_expiry_date", "Driving Licence Expiry Date (YYYY-MM-DD)"),
+    ("present_line1", "Present Address Line 1"),
+    ("present_line2", "Present Address Line 2"),
+    ("present_city", "Present Address City"),
+    ("present_state", "Present Address State"),
+    ("present_pincode", "Present Address Pincode"),
+    ("present_country", "Present Address Country"),
+    ("same_as_present", "Permanent Same as Present (YES/NO)"),
+    ("permanent_line1", "Permanent Address Line 1"),
+    ("permanent_line2", "Permanent Address Line 2"),
+    ("permanent_city", "Permanent Address City"),
+    ("permanent_state", "Permanent Address State"),
+    ("permanent_pincode", "Permanent Address Pincode"),
+    ("permanent_country", "Permanent Address Country"),
     ("applied_designation", "Applied Designation* (must match Organization Setup)"),
     ("applied_employee_category", "Applied Employee Category* (must match Organization Setup)"),
     ("applied_cost_center", "Applied Cost Center* (must match Organization Setup)"),
@@ -72,6 +85,11 @@ SAMPLE_ROW = {
     "pan": "ABCDE1234G", "pan_name": "Anitha Raman", "pan_dob": "1996-08-21",
     "dl_licence_number": "", "dl_badge_number": "", "dl_vehicle_class": "",
     "dl_issuing_authority": "", "dl_issue_date": "", "dl_expiry_date": "",
+    "present_line1": "12 MG Road", "present_line2": "", "present_city": "Puducherry",
+    "present_state": "Puducherry", "present_pincode": "605001", "present_country": "India",
+    "same_as_present": "YES",
+    "permanent_line1": "", "permanent_line2": "", "permanent_city": "",
+    "permanent_state": "", "permanent_pincode": "", "permanent_country": "",
     "applied_designation": "Bus Driver", "applied_employee_category": "Driver",
     "applied_cost_center": "Puducherry", "applied_project": "Puducherry Route Ops",
     "applied_date": "2026-01-01", "source": "Referral", "remarks": "",
@@ -148,6 +166,11 @@ def _cell_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _cell_bool(value) -> bool:
+    text = _cell_str(value)
+    return bool(text) and text.strip().lower() in ("yes", "y", "true", "1")
 
 
 def _lookup(db: Session, model, name: str | None):
@@ -238,6 +261,12 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
             if alternate_mobile_number:
                 alternate_mobile_number = validate_mobile(alternate_mobile_number)
             dl_licence_number = _cell_str(data.get("dl_licence_number"))
+            present_pincode = _cell_str(data.get("present_pincode"))
+            if present_pincode:
+                present_pincode = validate_pincode(present_pincode)
+            permanent_pincode = _cell_str(data.get("permanent_pincode"))
+            if permanent_pincode:
+                permanent_pincode = validate_pincode(permanent_pincode)
 
             try:
                 recruitment_service.validate_unique_identifiers(db, aadhaar, pan, dl_licence_number)
@@ -262,6 +291,13 @@ def import_candidates_workbook(db: Session, file_bytes: bytes, actor: User) -> d
                 dl_vehicle_class=_cell_str_upper(data.get("dl_vehicle_class")),
                 dl_issuing_authority=_cell_str_upper(data.get("dl_issuing_authority")),
                 dl_issue_date=_cell_date(data.get("dl_issue_date")), dl_expiry_date=_cell_date(data.get("dl_expiry_date")),
+                present_line1=_cell_str(data.get("present_line1")), present_line2=_cell_str(data.get("present_line2")),
+                present_city=_cell_str_upper(data.get("present_city")), present_state=_cell_str_upper(data.get("present_state")),
+                present_pincode=present_pincode, present_country=_cell_str_upper(data.get("present_country")),
+                same_as_present=_cell_bool(data.get("same_as_present")),
+                permanent_line1=_cell_str(data.get("permanent_line1")), permanent_line2=_cell_str(data.get("permanent_line2")),
+                permanent_city=_cell_str_upper(data.get("permanent_city")), permanent_state=_cell_str_upper(data.get("permanent_state")),
+                permanent_pincode=permanent_pincode, permanent_country=_cell_str_upper(data.get("permanent_country")),
                 applied_designation_id=designation.id,
                 applied_employee_category_id=employee_category.id,
                 applied_cost_center_id=cost_center.id,
