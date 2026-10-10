@@ -19,7 +19,7 @@ export default function ApprovalRules() {
     client.get("/approval-rules").then((res) => setRules(res.data));
     client.get("/cost-centers").then((res) => setCostCenters(res.data));
     client.get("/employee-categories").then((res) => setCategories(res.data));
-    client.get("/auth/roles").then((res) => setRoles(res.data.filter((r) => r.name !== "HR_ADMIN")));
+    client.get("/auth/roles").then((res) => setRoles(res.data.filter((r) => r.name !== "HR_ADMIN" && r.name !== "SUPER_ADMIN")));
   }
   useEffect(reload, []);
 

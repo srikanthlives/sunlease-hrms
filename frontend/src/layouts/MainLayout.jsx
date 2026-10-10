@@ -72,7 +72,7 @@ const NAV = [
   },
   {
     section: "Organization Setup",
-    roles: ["HR_ADMIN"],
+    roles: ["HR_ADMIN", "SUPER_ADMIN"],
     items: [
       { to: "/organization/companies", label: "Companies", icon: Landmark },
       { to: "/organization/cost-centers", label: "Cost Center", icon: Network },
