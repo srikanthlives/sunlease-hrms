@@ -1,14 +1,20 @@
 import { useEffect, useState } from "react";
-import { Button, Input } from "./ui";
+import { Button, Input, Select } from "./ui";
 
 // Field labels/order per document kind - mirrors backend/app/services/
 // ocr_service.py's returned field keys exactly, so no translation layer
-// is needed between what the backend extracts and what this shows.
+// is needed between what the backend extracts and what this shows. Every
+// field the backend can extract is listed here, even ones with nowhere
+// to "Apply" to (dl_holder_name/dl_address: Personal Info already has
+// its own name, and nothing stores a DL's own printed address) - they're
+// still shown for the reviewer to see, per "show all the scanned data".
 const FIELD_CONFIG = {
   AADHAAR: [
     ["aadhaar_name", "Name (as on Aadhaar)", "text"],
     ["aadhaar_dob", "Date of Birth (as on Aadhaar)", "date"],
     ["aadhaar", "Aadhaar Number", "text"],
+    ["gender", "Gender", "select", ["MALE", "FEMALE", "OTHER"]],
+    ["father_husband_name", "Father's/Husband's Name", "text"],
     ["present_line1", "Address Line 1 (on Aadhaar)", "text"],
     ["present_city", "City", "text"],
     ["present_state", "State", "text"],
@@ -19,6 +25,7 @@ const FIELD_CONFIG = {
     ["pan_name", "Name (as on PAN)", "text"],
     ["pan", "PAN Number", "text"],
     ["pan_dob", "Date of Birth (as on PAN)", "date"],
+    ["father_husband_name", "Father's/Husband's Name", "text"],
   ],
   DRIVING_LICENCE: [
     ["dl_licence_number", "Licence Number", "text"],
@@ -27,6 +34,16 @@ const FIELD_CONFIG = {
     ["dl_issuing_authority", "Issuing Authority", "text"],
     ["dl_issue_date", "HMV Issue Date", "date"],
     ["dl_expiry_date", "Expiry Date", "date"],
+    ["dl_holder_name", "Name (as on Licence)", "text"],
+    ["dl_address", "Address (as on Licence)", "text"],
+  ],
+  BANK_PASSBOOK: [
+    ["bank_name", "Bank Name", "text"],
+    ["branch", "Branch", "text"],
+    ["account_number", "Account Number", "text"],
+    ["ifsc", "IFSC Code", "text"],
+    ["account_holder_name", "Account Holder Name", "text"],
+    ["account_type", "Account Type", "text"],
   ],
 };
 
@@ -70,11 +87,21 @@ export default function OcrPreviewModal({ title, loading, error, kind, fields, o
               </p>
             )}
             <div className="space-y-2.5 max-h-[60vh] overflow-y-auto">
-              {config.map(([key, label, type]) => (
-                <Input
-                  key={key} type={type} label={label} value={edited[key] || ""}
-                  onChange={(e) => setEdited({ ...edited, [key]: e.target.value })}
-                />
+              {config.map(([key, label, type, options]) => (
+                type === "select" ? (
+                  <Select
+                    key={key} label={label} value={edited[key] || ""}
+                    onChange={(e) => setEdited({ ...edited, [key]: e.target.value })}
+                  >
+                    <option value="">Select...</option>
+                    {options.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </Select>
+                ) : (
+                  <Input
+                    key={key} type={type} label={label} value={edited[key] || ""}
+                    onChange={(e) => setEdited({ ...edited, [key]: e.target.value })}
+                  />
+                )
               ))}
             </div>
             <div className="flex justify-end gap-2 mt-4">

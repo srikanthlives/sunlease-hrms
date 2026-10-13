@@ -9,7 +9,8 @@ import { Download, Trash2, Upload, ScanLine } from "lucide-react";
 // mirrors backend/app/services/ocr_service.py::ocr_document_kind.
 function isOcrEligible(documentTypeName) {
   const n = (documentTypeName || "").toLowerCase();
-  return n.includes("aadhaar") || n.includes("aadhar") || n.includes("pan") || n.includes("driving") || n.includes("licence") || n.includes("license");
+  return n.includes("aadhaar") || n.includes("aadhar") || n.includes("pan") || n.includes("driving") || n.includes("licence") || n.includes("license")
+    || n.includes("passbook") || n.includes("bank") || n.includes("cheque") || n.includes("check");
 }
 
 // Driving Licence is inserted before Review & Submit only when a
@@ -376,20 +377,26 @@ export default function EmployeeWizard() {
   // nothing is persisted until that step's own Save & Continue is
   // clicked, same as typing the values in by hand.
   function applyOcrFields(fields) {
-    const personalKeys = ["aadhaar_name", "aadhaar_dob", "aadhaar", "pan_name", "pan_dob", "pan"];
+    const personalKeys = ["aadhaar_name", "aadhaar_dob", "aadhaar", "pan_name", "pan_dob", "pan", "gender", "father_husband_name"];
     const addressKeys = ["present_line1", "present_line2", "present_city", "present_state", "present_pincode", "present_country"];
     const dlKeys = ["dl_licence_number", "dl_badge_number", "dl_vehicle_class", "dl_issuing_authority", "dl_issue_date", "dl_expiry_date"];
-    const personalUpdates = {}, addressUpdates = {}, dlUpdates = {};
+    const bankKeys = ["bank_name", "branch", "account_number", "ifsc", "account_holder_name", "account_type"];
+    const personalUpdates = {}, addressUpdates = {}, dlUpdates = {}, bankUpdates = {};
     for (const [key, value] of Object.entries(fields)) {
       if (!value) continue;
       if (personalKeys.includes(key)) personalUpdates[key] = value;
       else if (addressKeys.includes(key)) addressUpdates[key] = value;
       else if (dlKeys.includes(key)) dlUpdates[key] = value;
+      else if (bankKeys.includes(key)) bankUpdates[key] = value;
+      // Keys with nowhere to apply to (dl_holder_name, dl_address) are
+      // informational-only - shown in the review popup, silently
+      // dropped here since no step owns that data.
     }
     if (Object.keys(personalUpdates).length) setPersonal((p) => ({ ...p, ...personalUpdates }));
     if (Object.keys(addressUpdates).length) setAddress((a) => ({ ...a, ...addressUpdates }));
     if (Object.keys(dlUpdates).length) setDrivingLicence((d) => ({ ...d, ...dlUpdates }));
-    setBanner("Extracted details applied — go to the relevant step (Personal Information / Address / Driving Licence) to review and Save & Continue.");
+    if (Object.keys(bankUpdates).length) setBank((b) => ({ ...b, ...bankUpdates }));
+    setBanner("Extracted details applied — go to the relevant step (Personal Information / Address / Driving Licence / Bank Information) to review and Save & Continue.");
     setOcrPreview(null);
   }
 

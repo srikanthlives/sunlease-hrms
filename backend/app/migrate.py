@@ -174,6 +174,23 @@ def _close_open_assignments_of_separated(target_engine: Engine, verbose: bool) -
                 print(f"Closed {result.rowcount} open {tbl} row(s) of Separated employees at their exit date.")
 
 
+def _ensure_bank_passbook_document_type(target_engine: Engine, inspector, verbose: bool) -> None:
+    """One-off data fixup (not a schema change - seed.py's full-mode doc
+    type list isn't re-run on an existing deployment): adds a "Bank
+    Passbook" DocumentType row if missing, so OCR extraction
+    (services/ocr_service.py) and Document Configuration have something
+    to key off for bank passbook/cheque uploads on every existing
+    installation, not just a fresh seed."""
+    if "document_types" not in inspector.get_table_names():
+        return
+    with target_engine.begin() as conn:
+        exists = conn.execute(text('SELECT 1 FROM document_types WHERE name = \'Bank Passbook\'')).first()
+        if not exists:
+            conn.execute(text('INSERT INTO document_types (name, is_active) VALUES (\'Bank Passbook\', 1)'))
+            if verbose:
+                print('Added "Bank Passbook" document type.')
+
+
 def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
     target_engine = target_engine or engine
     summary = {"tables_created": [], "columns_added": []}
@@ -212,6 +229,7 @@ def migrate(target_engine: Engine = None, verbose: bool = True) -> dict:
                 summary["columns_added"].append((table.name, column.name))
 
     _close_open_assignments_of_separated(target_engine, verbose)
+    _ensure_bank_passbook_document_type(target_engine, inspect(target_engine), verbose)
 
     if verbose:
         if not summary["tables_created"] and not summary["columns_added"]:

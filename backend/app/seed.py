@@ -116,7 +116,7 @@ try:
             if not db.query(EmployeeType).filter(EmployeeType.name == type_name).first():
                 db.add(EmployeeType(name=type_name))
 
-        for doc_name in ["Aadhaar Card", "PAN Card", "Photo", "Educational Certificate", "Driving Licence", "Medical Fitness Certificate"]:
+        for doc_name in ["Aadhaar Card", "PAN Card", "Photo", "Educational Certificate", "Driving Licence", "Medical Fitness Certificate", "Bank Passbook"]:
             if not db.query(DocumentType).filter(DocumentType.name == doc_name).first():
                 db.add(DocumentType(name=doc_name))
 

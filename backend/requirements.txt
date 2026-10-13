@@ -27,5 +27,13 @@ requests==2.31.0
 # Local OCR extraction for Aadhaar/PAN/Driving Licence uploads
 # (services/ocr_service.py) - needs the tesseract-ocr system binary
 # (installed in Dockerfile), never calls out to a cloud OCR API.
+# opencv-python-headless (no GUI/X11 deps, much smaller than full
+# opencv-python) powers a second CLAHE/adaptive-threshold OCR pass -
+# deliberately NOT the openbharatocr package, which would drag in
+# EasyOCR + PyTorch (~500MB) for a passbook parser this app doesn't use;
+# its actual Aadhaar/PAN/DL extractors turned out to be plain Tesseract +
+# OpenCV + regex, so the useful techniques were ported directly instead.
 pytesseract==0.3.10
 Pillow==10.4.0
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
