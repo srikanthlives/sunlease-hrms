@@ -17,7 +17,7 @@ from app.schemas.recruitment import (
     CandidateIn, CandidateInterestIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
-from app.services import audit_service, candidate_bulk_import_service, document_service, employee_service, licence_service, permission_service, recruitment_service
+from app.services import audit_service, candidate_bulk_import_service, document_service, employee_service, licence_service, ocr_service, permission_service, recruitment_service
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
@@ -619,6 +619,22 @@ def download_candidate_document(candidate_id: int, document_id: int, db: Session
     candidate = _get_candidate(db, candidate_id)
     doc = _get_candidate_document(db, candidate, document_id)
     return document_service.serve_object(doc.object_key, media_type=doc.mime_type, download_name=doc.file_name)
+
+
+@router.post("/candidates/{candidate_id}/documents/{document_id}/ocr", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def ocr_candidate_document(candidate_id: int, document_id: int, db: Session = Depends(get_db)):
+    """Best-effort local OCR extraction for an already-uploaded Aadhaar/
+    PAN/Driving Licence document - see services/ocr_service.py. Returns
+    the extracted fields for the frontend to show in a review popup;
+    nothing is written to the candidate here, applying is a separate,
+    explicit frontend action."""
+    candidate = _get_candidate(db, candidate_id)
+    doc = _get_candidate_document(db, candidate, document_id)
+    try:
+        content = get_storage().read(doc.object_key)
+        return ocr_service.extract_document_fields(doc.document_type, content, doc.mime_type)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
 
 @router.delete("/candidates/{candidate_id}/documents/{document_id}", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

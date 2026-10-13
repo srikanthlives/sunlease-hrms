@@ -23,3 +23,9 @@ simpleeval==0.9.13
 
 # Outbound email via the cPanel HTTP mail relay (services/email_service.py)
 requests==2.31.0
+
+# Local OCR extraction for Aadhaar/PAN/Driving Licence uploads
+# (services/ocr_service.py) - needs the tesseract-ocr system binary
+# (installed in Dockerfile), never calls out to a cloud OCR API.
+pytesseract==0.3.10
+Pillow==10.4.0

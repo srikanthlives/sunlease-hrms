@@ -24,7 +24,7 @@ from app.schemas.employees import (
 )
 from app.services import (
     audit_service, employee_service, approval_service, permission_service,
-    document_service, licence_service, bulk_import_service, transfer_service, payroll_service,
+    document_service, licence_service, bulk_import_service, transfer_service, payroll_service, ocr_service,
 )
 from app.services.storage import get_storage
 
@@ -616,6 +616,25 @@ def preview_document(episode_id: int, document_id: int, db: Session = Depends(ge
     if not document:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     return document_service.serve_object(document.object_key, media_type=document.mime_type)
+
+
+@router.post("/{episode_id}/documents/{document_id}/ocr", dependencies=[Depends(require_permission(Permission.EMPLOYEE_DOCUMENTS_UPLOAD))])
+def ocr_document(episode_id: int, document_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Best-effort local OCR extraction for an already-uploaded Aadhaar/
+    PAN/Driving Licence document - see services/ocr_service.py. Returns
+    the extracted fields for the wizard to show in a review popup;
+    nothing is written to the employee here, applying is a separate,
+    explicit frontend action."""
+    episode = _get_episode(db, episode_id)
+    _check_scope(db, user, episode)
+    document = db.query(DocumentMeta).filter(DocumentMeta.id == document_id, DocumentMeta.episode_id == episode.id).first()
+    if not document:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    try:
+        content = get_storage().read(document.object_key)
+        return ocr_service.extract_document_fields(document.document_type, content, document.mime_type)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
 
 @router.delete("/{episode_id}/documents/{document_id}", dependencies=[Depends(require_permission(Permission.EMPLOYEE_DOCUMENTS_UPLOAD))])

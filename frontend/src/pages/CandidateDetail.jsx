@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Paperclip, Eye, Upload, Download, Trash2 } from "lucide-react";
+import { Paperclip, Eye, Upload, Download, Trash2, ScanLine } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, Table, StatusBadge, SectionDivider, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
+import OcrPreviewModal from "../components/OcrPreviewModal";
 import { useAuth } from "../context/AuthContext";
 
 const RESULT_OPTIONS = ["PENDING", "PASS", "FAIL", "EXCEPTION"];
+
+// Only Aadhaar/PAN/Driving Licence documents support OCR extraction -
+// mirrors backend/app/services/ocr_service.py::ocr_document_kind exactly,
+// so the button only ever shows where the backend can actually act on it.
+function isOcrEligible(documentTypeName) {
+  const n = (documentTypeName || "").toLowerCase();
+  return n.includes("aadhaar") || n.includes("aadhar") || n.includes("pan") || n.includes("driving") || n.includes("licence") || n.includes("license");
+}
 
 // Mirrors backend/app/core/validators.py - kept in sync manually since the
 // frontend and backend don't share a validation layer. Only checked when
@@ -50,6 +59,7 @@ export default function CandidateDetail() {
   const [docError, setDocError] = useState("");
   const [previewDoc, setPreviewDoc] = useState(null);
   const [previewProof, setPreviewProof] = useState(null);
+  const [ocrPreview, setOcrPreview] = useState(null); // { loading, error, kind, fields, documentTypeName }
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [testedOnByCriteria, setTestedOnByCriteria] = useState({});
@@ -279,6 +289,28 @@ export default function CandidateDetail() {
     for (const f of EDIT_FIELDS) form[f] = candidate[f] ?? "";
     setEditForm(form);
     setEditing(true);
+  }
+
+  async function runOcr(documentId, documentTypeName) {
+    setOcrPreview({ loading: true, error: "", kind: null, fields: {}, documentTypeName });
+    try {
+      const res = await client.post(`/recruitment/candidates/${candidateId}/documents/${documentId}/ocr`);
+      setOcrPreview({ loading: false, error: "", kind: res.data.kind, fields: res.data.fields, documentTypeName });
+    } catch (err) {
+      setOcrPreview({ loading: false, error: apiErrorMessage(err), kind: null, fields: {}, documentTypeName });
+    }
+  }
+
+  // Drops the OCR-extracted fields into the edit form (opening it first
+  // if it isn't already open) - same as any other manual edit, nothing
+  // is persisted until the existing Save Changes button is clicked.
+  function applyOcrFields(fields) {
+    setEditForm((prev) => {
+      const base = prev || Object.fromEntries(EDIT_FIELDS.map((f) => [f, candidate[f] ?? ""]));
+      return { ...base, ...fields };
+    });
+    setEditing(true);
+    setOcrPreview(null);
   }
 
   async function saveEdit() {
@@ -679,6 +711,14 @@ export default function CandidateDetail() {
                     <Button variant="outline" size="sm" className="!p-1.5" title="Download" aria-label="Download" onClick={() => downloadDocument(d.document_id, d.file_name)}>
                       <Download size={14} />
                     </Button>
+                    {isOcrEligible(d.document_type_name) && (
+                      <Button
+                        variant="outline" size="sm" className="!p-1.5" title="Extract via OCR" aria-label="Extract via OCR"
+                        onClick={() => runOcr(d.document_id, d.document_type_name)}
+                      >
+                        <ScanLine size={14} />
+                      </Button>
+                    )}
                     {!isTerminal && (
                       <Button
                         variant="danger" size="sm" className="!p-1.5"
@@ -718,6 +758,15 @@ export default function CandidateDetail() {
           basePath={`/recruitment/candidates/${candidateId}/documents`}
           document={previewDoc}
           onClose={() => setPreviewDoc(null)}
+        />
+      )}
+      {ocrPreview && (
+        <OcrPreviewModal
+          title={`Extracted from ${ocrPreview.documentTypeName}`}
+          loading={ocrPreview.loading} error={ocrPreview.error}
+          kind={ocrPreview.kind} fields={ocrPreview.fields}
+          onApply={applyOcrFields}
+          onClose={() => setOcrPreview(null)}
         />
       )}
 

@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, SectionDivider, StatusBadge, formatAadhaar, formatDate } from "../components/ui";
-import { Download, Trash2, Upload } from "lucide-react";
+import OcrPreviewModal from "../components/OcrPreviewModal";
+import { Download, Trash2, Upload, ScanLine } from "lucide-react";
+
+// Only Aadhaar/PAN/Driving Licence documents support OCR extraction -
+// mirrors backend/app/services/ocr_service.py::ocr_document_kind.
+function isOcrEligible(documentTypeName) {
+  const n = (documentTypeName || "").toLowerCase();
+  return n.includes("aadhaar") || n.includes("aadhar") || n.includes("pan") || n.includes("driving") || n.includes("licence") || n.includes("license");
+}
 
 // Driving Licence is inserted before Review & Submit only when a
 // DrivingLicenceRequirement rule matches this employee's Employee Type/
@@ -75,6 +83,7 @@ export default function EmployeeWizard() {
   const [requiredDocs, setRequiredDocs] = useState([]);
   const [docUploadingId, setDocUploadingId] = useState(null);
   const [docError, setDocError] = useState("");
+  const [ocrPreview, setOcrPreview] = useState(null); // { loading, error, kind, fields, documentTypeName }
   const [dlRequirement, setDlRequirement] = useState({ show: false, is_required: false });
   const [drivingLicence, setDrivingLicence] = useState({});
   const [photoUrl, setPhotoUrl] = useState(null);
@@ -350,6 +359,38 @@ export default function EmployeeWizard() {
     } catch (err) {
       setDocError(apiErrorMessage(err));
     }
+  }
+
+  async function runOcr(documentMetaId, documentTypeName) {
+    setOcrPreview({ loading: true, error: "", kind: null, fields: {}, documentTypeName });
+    try {
+      const res = await client.post(`/employees/${episodeId}/documents/${documentMetaId}/ocr`);
+      setOcrPreview({ loading: false, error: "", kind: res.data.kind, fields: res.data.fields, documentTypeName });
+    } catch (err) {
+      setOcrPreview({ loading: false, error: apiErrorMessage(err), kind: null, fields: {}, documentTypeName });
+    }
+  }
+
+  // Drops the OCR-extracted fields straight into whichever step's local
+  // state already owns them (Personal Info / Address / Driving Licence) -
+  // nothing is persisted until that step's own Save & Continue is
+  // clicked, same as typing the values in by hand.
+  function applyOcrFields(fields) {
+    const personalKeys = ["aadhaar_name", "aadhaar_dob", "aadhaar", "pan_name", "pan_dob", "pan"];
+    const addressKeys = ["present_line1", "present_line2", "present_city", "present_state", "present_pincode", "present_country"];
+    const dlKeys = ["dl_licence_number", "dl_badge_number", "dl_vehicle_class", "dl_issuing_authority", "dl_issue_date", "dl_expiry_date"];
+    const personalUpdates = {}, addressUpdates = {}, dlUpdates = {};
+    for (const [key, value] of Object.entries(fields)) {
+      if (!value) continue;
+      if (personalKeys.includes(key)) personalUpdates[key] = value;
+      else if (addressKeys.includes(key)) addressUpdates[key] = value;
+      else if (dlKeys.includes(key)) dlUpdates[key] = value;
+    }
+    if (Object.keys(personalUpdates).length) setPersonal((p) => ({ ...p, ...personalUpdates }));
+    if (Object.keys(addressUpdates).length) setAddress((a) => ({ ...a, ...addressUpdates }));
+    if (Object.keys(dlUpdates).length) setDrivingLicence((d) => ({ ...d, ...dlUpdates }));
+    setBanner("Extracted details applied — go to the relevant step (Personal Information / Address / Driving Licence) to review and Save & Continue.");
+    setOcrPreview(null);
   }
 
   async function downloadDocument(documentMetaId, fileName) {
@@ -914,6 +955,14 @@ export default function EmployeeWizard() {
                         <Button variant="outline" size="sm" className="!p-1.5" title="Download" aria-label="Download" onClick={() => downloadDocument(d.document_meta_id, d.file_name)}>
                           <Download size={14} />
                         </Button>
+                        {isOcrEligible(d.document_type_name) && (
+                          <Button
+                            variant="outline" size="sm" className="!p-1.5" title="Extract via OCR" aria-label="Extract via OCR"
+                            onClick={() => runOcr(d.document_meta_id, d.document_type_name)}
+                          >
+                            <ScanLine size={14} />
+                          </Button>
+                        )}
                         <Button variant="danger" size="sm" className="!p-1.5" title="Remove" aria-label="Remove" onClick={() => removeDocument(d.document_meta_id)}>
                           <Trash2 size={14} />
                         </Button>
@@ -1295,6 +1344,16 @@ export default function EmployeeWizard() {
           <Button variant="accent" onClick={() => navigate(`/employees/${episodeId}`)}>Done</Button>
         )}
       </div>
+
+      {ocrPreview && (
+        <OcrPreviewModal
+          title={`Extracted from ${ocrPreview.documentTypeName}`}
+          loading={ocrPreview.loading} error={ocrPreview.error}
+          kind={ocrPreview.kind} fields={ocrPreview.fields}
+          onApply={applyOcrFields}
+          onClose={() => setOcrPreview(null)}
+        />
+      )}
     </div>
   );
 }
