@@ -378,10 +378,18 @@ class ServiceToken(Base):
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     last_used_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
+    # NULL = never expires. A dated token is "renewed" by pushing this out
+    # (and optionally rotating the secret), not by creating a second row -
+    # so last_used_at and the audit trail stay attached to one credential.
+    expires_at = Column(DateTime, nullable=True)
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at < now()
 
     @property
     def is_active(self) -> bool:
-        return self.revoked_at is None
+        return self.revoked_at is None and not self.is_expired
 
     def has_scope(self, scope: str) -> bool:
         return scope in (self.scopes or "").split()

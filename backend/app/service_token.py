@@ -1,9 +1,11 @@
-"""Mint the first service token from the command line, before any UI exists:
+"""Mint a service token from the command line - a bootstrap/recovery path for
+when no SUPER_ADMIN login is reachable:
 
     python -m app.service_token --name depot-sync --scope employees:depot-export
 
-Prints the token once. Thereafter use the super-admin API
-(/api/v1/admin/service-tokens) to list or revoke.
+Prints the token once. The normal route is the UI: Administration >
+Integration Keys (SUPER_ADMIN only), which can also rename, re-scope, renew,
+rotate, deactivate and reactivate a key - all of which this script cannot.
 """
 import argparse
 

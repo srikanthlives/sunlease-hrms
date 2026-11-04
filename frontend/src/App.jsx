@@ -22,6 +22,7 @@ import EmployeeTypesMaster from "./pages/org/EmployeeTypesMaster";
 import DocumentTypesMaster from "./pages/org/DocumentTypesMaster";
 import AuditLogs from "./pages/AuditLogs";
 import UsersAdmin from "./pages/UsersAdmin";
+import IntegrationKeys from "./pages/IntegrationKeys";
 import RolesPermissions from "./pages/RolesPermissions";
 import ApprovalRules from "./pages/ApprovalRules";
 import DocumentRequirementsConfig from "./pages/DocumentRequirementsConfig";
@@ -138,6 +139,7 @@ export default function App() {
             <Route path="admin/approval-rules" element={<ApprovalRules />} />
             <Route path="admin/document-requirements" element={<DocumentRequirementsConfig />} />
             <Route path="admin/driving-licence-requirements" element={<DrivingLicenceRequirementsConfig />} />
+            <Route path="admin/integration-keys" element={<IntegrationKeys />} />
             <Route path="admin/audit-logs" element={<AuditLogs />} />
           </Route>
         </Routes>

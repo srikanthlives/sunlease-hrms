@@ -330,6 +330,44 @@ explicitly documented (in both the endpoint docstring and the UI) as
 best-effort, **not** government-portal-certified — same honesty
 `salary-app` itself gives for its non-ESIC-certified templates.
 
+## Integration API (machine-to-machine)
+
+`routers/integrations.py` serves other Sunlease systems (the depot app is
+the first consumer) under `/api/v1/integrations`, authenticated by a
+**`ServiceToken`**, not a user JWT — `core/deps.py::require_service_token(scope)`,
+kept deliberately separate from `get_current_user` so a service token can
+never reach a human endpoint. Only the token's SHA-256 hash is stored, so a
+lost key is **rotated, never recovered**.
+
+- Feed: `GET /integrations/employees` and `/employees/rules`
+  (`depot_export_service`). Originally published as `/depot-employees`;
+  renamed, with the old paths kept as undocumented deprecated aliases
+  (`include_in_schema=False`) registered at the bottom of
+  `integrations.py` — drop them once the depot app is on `/employees`.
+- Grantable scopes live in **`core/scopes.py`** (one place, so the UI
+  offers checkboxes instead of free-typed scope strings — a typo there
+  produces a key that authenticates but 403s). Every scope named there
+  must actually be enforced by some route.
+- Lifecycle is managed **in place on one row** (never a second row, so
+  `last_used_at` and the audit trail stay attached to one credential):
+  `expires_at` NULL = never expires, `is_active = revoked_at is None and
+  not is_expired`. Super-admin-only endpoints on `routers/admin.py`:
+  `GET/POST /admin/service-tokens`, `PUT /{id}` (rename/re-scope/renew
+  expiry), `POST /{id}/rotate` (new secret, same identity; also
+  un-revokes), `POST /{id}/activate` + `/deactivate`, `DELETE /{id}`
+  (revokes — kept for existing callers, same thing as `/deactivate`),
+  `GET /admin/service-token-scopes`. An **expired** key is deliberately
+  not reactivated by `/activate` — that needs a new expiry (PUT) or a
+  rotate.
+- UI: **Administration > Integration Keys** (`pages/IntegrationKeys.jsx`,
+  route `/admin/integration-keys`, nav item `roles: ["SUPER_ADMIN"]`).
+  The secret is displayed exactly once, in a copy-to-clipboard modal,
+  after create or rotate. `backend/app/service_token.py` remains as a
+  CLI bootstrap path only.
+- This is the one feature area with real pytest coverage
+  (`backend/app/tests/test_depot_export.py` — run with
+  `backend/.venv/bin/python -m pytest app/tests -q` from `backend/`).
+
 ## Outbound email
 
 `backend/app/services/email_service.py` — two transports, auto-selected:

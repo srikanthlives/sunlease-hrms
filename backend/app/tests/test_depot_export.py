@@ -8,12 +8,14 @@ from app.models.models import (
 from app.routers.integrations import DEPOT_SCOPE
 from app.services import depot_export_service as svc
 
-URL = "/api/v1/integrations/depot-employees"
+URL = "/api/v1/integrations/employees"
+LEGACY_URL = "/api/v1/integrations/depot-employees"
 
 
-def mint(db, scopes=DEPOT_SCOPE, revoked=False):
+def mint(db, scopes=DEPOT_SCOPE, revoked=False, expires_at=None):
     token = new_service_token()
     db.add(ServiceToken(name="depot-sync", token_hash=hash_service_token(token), scopes=scopes,
+                        expires_at=expires_at,
                         revoked_at=dt.datetime.utcnow() if revoked else None))
     db.commit()
     return {"Authorization": f"Bearer {token}"}
@@ -56,7 +58,19 @@ def test_a_service_token_is_required_and_must_carry_the_scope(client, db):
     assert client.get(URL, headers={"Authorization": "Bearer nonsense"}).status_code == 401
     assert client.get(URL, headers=mint(db, scopes="payroll:read")).status_code == 403
     assert client.get(URL, headers=mint(db, revoked=True)).status_code == 401   # revoked
+    yesterday = dt.datetime.utcnow() - dt.timedelta(days=1)
+    assert client.get(URL, headers=mint(db, expires_at=yesterday)).status_code == 401
+    tomorrow = dt.datetime.utcnow() + dt.timedelta(days=1)
+    assert client.get(URL, headers=mint(db, expires_at=tomorrow)).status_code == 200
     assert client.get(URL, headers=mint(db)).status_code == 200
+
+
+def test_the_legacy_depot_employees_path_still_answers(client, db):
+    """The feed was renamed to /employees; the old path stays until every
+    deployed consumer has moved."""
+    world(db)
+    assert client.get(LEGACY_URL, headers=mint(db)).status_code == 200
+    assert client.get(LEGACY_URL + "/rules", headers=mint(db)).status_code == 200
 
 
 def test_only_operations_staff_coach_captains_are_exported(client, db):

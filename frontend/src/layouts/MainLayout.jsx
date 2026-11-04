@@ -8,7 +8,7 @@ import {
   MapPin, BadgeCheck, IdCard, FileStack, ClipboardList, CarFront,
   Clock, CalendarDays, ClipboardCheck, CalendarCheck, CalendarClock, CalendarRange, Palmtree,
   Wallet, Banknote, Settings2, PlayCircle, ReceiptText, PlusCircle, HandCoins,
-  ShieldAlert, FileSpreadsheet, UserPlus, ListChecks,
+  ShieldAlert, FileSpreadsheet, UserPlus, ListChecks, KeyRound,
 } from "lucide-react";
 
 const COLLAPSE_KEY = "hrms_sidebar_collapsed";
@@ -95,6 +95,7 @@ const NAV = [
       { to: "/admin/document-requirements", label: "Document Configuration", icon: ClipboardList },
       { to: "/admin/driving-licence-requirements", label: "Driving Licence Configuration", icon: CarFront },
       { to: "/admin/selection-criteria", label: "Selection Criteria", icon: ListChecks },
+      { to: "/admin/integration-keys", label: "Integration Keys", icon: KeyRound, roles: ["SUPER_ADMIN"] },
       { to: "/admin/audit-logs", label: "Audit Logs", icon: ScrollText },
     ],
   },

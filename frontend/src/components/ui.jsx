@@ -38,6 +38,9 @@ const STATUS_STYLES = {
   EXCEPTION: "bg-warn/10 text-warn border-warn/30",
   INTERESTED: "bg-ok/10 text-ok border-ok/30",
   NOT_INTERESTED: "bg-danger/10 text-danger border-danger/30",
+  REVOKED: "bg-danger/10 text-danger border-danger/30",
+  EXPIRED: "bg-warn/10 text-warn border-warn/30",
+  DISABLED: "bg-ink/5 text-ink/50 border-ink/15",
 };
 
 export function StatusBadge({ status }) {

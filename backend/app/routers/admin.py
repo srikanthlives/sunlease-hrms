@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import hash_service_token, new_service_token
 from app.core.deps import get_current_user, require_super_admin
+from app.core.scopes import SCOPE_CODES, SERVICE_SCOPES
 from app.db.session import SessionLocal, engine, get_db
 from app.migrate import migrate
 from app.models.enums import AuditAction
@@ -119,17 +120,61 @@ def restore_db_backup(file: UploadFile = File(...), confirm: str = Form(...), ac
 
 # ---- service tokens (machine credentials) ---------------------------------
 # Super-admin only, like everything else on this router. The plaintext token is
-# returned exactly once, by the create call; afterwards only its hash exists,
-# so a lost token is replaced rather than recovered.
+# returned exactly once - by the create call, or by a rotate - and afterwards
+# only its hash exists, so a lost token is rotated rather than recovered.
+#
+# A token's lifecycle is managed in place on one row: deactivate (revoke),
+# reactivate, renew (push expiry out), rotate (new secret, same identity and
+# usage history). Rows are never deleted - the row is the record that the
+# credential existed and when it was last used.
 class ServiceTokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scopes: list[str] = Field(min_length=1)
+    expires_at: dt.datetime | None = None
+
+
+class ServiceTokenUpdate(BaseModel):
+    """Every field optional - only what's sent is changed. `expires_at: null`
+    is indistinguishable from "not sent" in JSON, so clearing an expiry uses
+    the explicit `never_expires` flag instead."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    scopes: list[str] | None = Field(default=None, min_length=1)
+    expires_at: dt.datetime | None = None
+    never_expires: bool = False
 
 
 def _token_out(t: ServiceToken) -> dict:
     return {"id": t.id, "name": t.name, "scopes": (t.scopes or "").split(),
             "created_at": t.created_at, "last_used_at": t.last_used_at,
-            "revoked_at": t.revoked_at, "is_active": t.is_active}
+            "revoked_at": t.revoked_at, "expires_at": t.expires_at,
+            "is_expired": t.is_expired, "is_active": t.is_active,
+            "status": ("REVOKED" if t.revoked_at is not None
+                       else "EXPIRED" if t.is_expired else "ACTIVE")}
+
+
+def _clean_scopes(scopes: list[str]) -> str:
+    cleaned = [s.strip() for s in scopes if s.strip()]
+    unknown = [s for s in cleaned if s not in SCOPE_CODES]
+    if unknown:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"Unknown scope(s): {', '.join(unknown)}")
+    if not cleaned:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "At least one scope is required")
+    return " ".join(dict.fromkeys(cleaned))
+
+
+def _get_token(db: Session, token_id: int) -> ServiceToken:
+    row = db.get(ServiceToken, token_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Service token not found")
+    return row
+
+
+@router.get("/service-token-scopes")
+def list_service_token_scopes():
+    """The scopes an admin may grant, so the UI never has to free-type one."""
+    return SERVICE_SCOPES
 
 
 @router.post("/service-tokens", status_code=status.HTTP_201_CREATED)
@@ -138,7 +183,8 @@ def create_service_token(payload: ServiceTokenCreate, db: Session = Depends(get_
     """Mint a token. `token` in the response is shown this once only."""
     token = new_service_token()
     row = ServiceToken(name=payload.name.strip(), token_hash=hash_service_token(token),
-                       scopes=" ".join(s.strip() for s in payload.scopes if s.strip()),
+                       scopes=_clean_scopes(payload.scopes),
+                       expires_at=payload.expires_at,
                        created_by_user_id=actor.id)
     db.add(row)
     db.commit()
@@ -153,13 +199,89 @@ def list_service_tokens(db: Session = Depends(get_db)):
     return [_token_out(t) for t in db.query(ServiceToken).order_by(ServiceToken.id.desc())]
 
 
+@router.put("/service-tokens/{token_id}")
+def update_service_token(token_id: int, payload: ServiceTokenUpdate,
+                         db: Session = Depends(get_db),
+                         actor: User = Depends(get_current_user)):
+    """Rename, re-scope, or renew (extend/clear the expiry). The secret itself
+    is untouched - use /rotate to replace that."""
+    row = _get_token(db, token_id)
+    before = f"name={row.name!r} scopes={row.scopes!r} expires_at={row.expires_at}"
+    if payload.name is not None:
+        row.name = payload.name.strip()
+    if payload.scopes is not None:
+        row.scopes = _clean_scopes(payload.scopes)
+    if payload.never_expires:
+        row.expires_at = None
+    elif payload.expires_at is not None:
+        row.expires_at = payload.expires_at
+    db.commit()
+    audit_service.record(db, "SERVICE_TOKEN", row.id, AuditAction.UPDATE, actor,
+                         old_value=before,
+                         new_value=f"name={row.name!r} scopes={row.scopes!r} expires_at={row.expires_at}")
+    db.commit()
+    return _token_out(row)
+
+
+@router.post("/service-tokens/{token_id}/rotate")
+def rotate_service_token(token_id: int, payload: ServiceTokenUpdate | None = None,
+                         db: Session = Depends(get_db),
+                         actor: User = Depends(get_current_user)):
+    """Issue a new secret for an existing token, invalidating the old one
+    immediately. Keeps the row - and so its name, scopes and usage history -
+    so a renewal reads as one credential over time rather than two.
+    Rotating also un-revokes and (if an expiry is sent) renews it, since the
+    point of rotating is to put the integration back in service."""
+    row = _get_token(db, token_id)
+    token = new_service_token()
+    row.token_hash = hash_service_token(token)
+    row.revoked_at = None
+    if payload is not None:
+        if payload.never_expires:
+            row.expires_at = None
+        elif payload.expires_at is not None:
+            row.expires_at = payload.expires_at
+    db.commit()
+    audit_service.record(db, "SERVICE_TOKEN", row.id, AuditAction.UPDATE, actor,
+                         new_value=f"rotated secret for service token {row.name!r}; "
+                                   f"expires_at={row.expires_at}")
+    db.commit()
+    return {**_token_out(row), "token": token}
+
+
+@router.post("/service-tokens/{token_id}/activate")
+def activate_service_token(token_id: int, db: Session = Depends(get_db),
+                           actor: User = Depends(get_current_user)):
+    """Un-revoke a token whose secret the caller still holds. An *expired*
+    token is not reactivated here - that needs a new expiry date (PUT) or a
+    rotate, which is a deliberate decision rather than one click."""
+    row = _get_token(db, token_id)
+    if row.revoked_at is not None:
+        row.revoked_at = None
+        db.commit()
+        audit_service.record(db, "SERVICE_TOKEN", row.id, AuditAction.UPDATE, actor,
+                             new_value=f"reactivated service token {row.name!r}")
+        db.commit()
+    return _token_out(row)
+
+
+@router.post("/service-tokens/{token_id}/deactivate")
+def deactivate_service_token(token_id: int, db: Session = Depends(get_db),
+                             actor: User = Depends(get_current_user)):
+    return _revoke(db, token_id, actor)
+
+
 @router.delete("/service-tokens/{token_id}")
 def revoke_service_token(token_id: int, db: Session = Depends(get_db),
                          actor: User = Depends(get_current_user)):
-    """Revoke, never delete: the row is the record that the token existed."""
-    row = db.get(ServiceToken, token_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Service token not found")
+    """Revoke, never delete: the row is the record that the token existed.
+    Kept as DELETE for the callers that already use it; /deactivate is the
+    same action under a name that matches what it does."""
+    return _revoke(db, token_id, actor)
+
+
+def _revoke(db: Session, token_id: int, actor: User) -> dict:
+    row = _get_token(db, token_id)
     if row.revoked_at is None:
         row.revoked_at = dt.datetime.utcnow()
         db.commit()
