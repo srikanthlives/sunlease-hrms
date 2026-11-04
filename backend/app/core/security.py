@@ -1,4 +1,6 @@
 import datetime as dt
+import hashlib
+import secrets
 
 import bcrypt
 from jose import JWTError, jwt
@@ -37,3 +39,18 @@ def decode_access_token(token: str) -> dict | None:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except JWTError:
         return None
+
+
+# ---- service tokens (machine credentials, see models.ServiceToken) --------
+SERVICE_TOKEN_PREFIX = "slh_"
+
+
+def new_service_token() -> str:
+    """A fresh token. Shown to the admin once and never stored in this form."""
+    return SERVICE_TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def hash_service_token(token: str) -> str:
+    """SHA-256 rather than bcrypt: the token is 256 bits of entropy already, so
+    there is nothing to brute-force, and this runs on every API call."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

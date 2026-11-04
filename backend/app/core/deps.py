@@ -1,11 +1,13 @@
+import datetime as dt
+
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, hash_service_token
 from app.db.session import get_db
 from app.models.enums import RoleName
-from app.models.models import User
+from app.models.models import ServiceToken, User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -66,5 +68,36 @@ def require_permission(code: str):
         if not has_permission(db, user, code):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing permission: {code}")
         return user
+
+    return checker
+
+
+def require_service_token(scope: str):
+    """Authenticates a machine caller by its service token (see
+    models.ServiceToken), not a user JWT. Kept separate from
+    `get_current_user` so a service token can never reach a human endpoint:
+    only routes that name this dependency accept one.
+    """
+    scheme = HTTPBearer(auto_error=False)
+
+    def checker(credentials: HTTPAuthorizationCredentials | None = Depends(scheme),
+                db: Session = Depends(get_db)) -> ServiceToken:
+        unauthorised = HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A valid service token is required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        if credentials is None or not credentials.credentials:
+            raise unauthorised
+        row = db.query(ServiceToken).filter(
+            ServiceToken.token_hash == hash_service_token(credentials.credentials)).first()
+        if row is None or not row.is_active:
+            raise unauthorised
+        if not row.has_scope(scope):
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                f"This service token does not carry the {scope} scope")
+        row.last_used_at = dt.datetime.utcnow()
+        db.commit()
+        return row
 
     return checker

@@ -356,6 +356,37 @@ class Address(Base):
     employee = relationship("Employee", back_populates="addresses")
 
 
+class ServiceToken(Base):
+    """A long-lived credential for a machine, not a person.
+
+    Used by other Sunlease systems that need to read a narrow slice of HRMS on
+    a schedule (the depot app's employee sync is the first). Deliberately not a
+    User: it never logs in, carries no role, and reaches only the endpoints
+    that ask for its scope by name. Only the hash is stored, so a copy of the
+    database does not yield a working token; revoking is setting revoked_at,
+    which needs no SECRET_KEY rotation and leaves human logins untouched.
+    """
+
+    __tablename__ = "service_tokens"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    # Space-separated scope names, e.g. "employees:depot-export".
+    scopes = Column(String(255), nullable=False, default="")
+    created_at = Column(DateTime, default=now)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None
+
+    def has_scope(self, scope: str) -> bool:
+        return scope in (self.scopes or "").split()
+
+
 class EmploymentEpisode(Base):
     """One row per period of employment (blueprint §3). Rejoining creates a
     new episode rather than a new Employee/duplicate person record."""

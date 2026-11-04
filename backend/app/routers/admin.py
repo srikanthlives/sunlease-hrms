@@ -16,12 +16,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import hash_service_token, new_service_token
 from app.core.deps import get_current_user, require_super_admin
 from app.db.session import SessionLocal, engine, get_db
 from app.migrate import migrate
 from app.models.enums import AuditAction
-from app.models.models import User
+from app.models.models import ServiceToken, User
 from app.services import audit_service
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"], dependencies=[Depends(require_super_admin)])
 
@@ -113,3 +115,55 @@ def restore_db_backup(file: UploadFile = File(...), confirm: str = Form(...), ac
         db.close()
 
     return {"detail": "Database restored. A backup of the previous database was saved alongside it on the server."}
+
+
+# ---- service tokens (machine credentials) ---------------------------------
+# Super-admin only, like everything else on this router. The plaintext token is
+# returned exactly once, by the create call; afterwards only its hash exists,
+# so a lost token is replaced rather than recovered.
+class ServiceTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    scopes: list[str] = Field(min_length=1)
+
+
+def _token_out(t: ServiceToken) -> dict:
+    return {"id": t.id, "name": t.name, "scopes": (t.scopes or "").split(),
+            "created_at": t.created_at, "last_used_at": t.last_used_at,
+            "revoked_at": t.revoked_at, "is_active": t.is_active}
+
+
+@router.post("/service-tokens", status_code=status.HTTP_201_CREATED)
+def create_service_token(payload: ServiceTokenCreate, db: Session = Depends(get_db),
+                         actor: User = Depends(get_current_user)):
+    """Mint a token. `token` in the response is shown this once only."""
+    token = new_service_token()
+    row = ServiceToken(name=payload.name.strip(), token_hash=hash_service_token(token),
+                       scopes=" ".join(s.strip() for s in payload.scopes if s.strip()),
+                       created_by_user_id=actor.id)
+    db.add(row)
+    db.commit()
+    audit_service.record(db, "SERVICE_TOKEN", row.id, AuditAction.CREATE, actor,
+                         new_value=f"created service token {row.name!r} with scopes {row.scopes!r}")
+    db.commit()
+    return {**_token_out(row), "token": token}
+
+
+@router.get("/service-tokens")
+def list_service_tokens(db: Session = Depends(get_db)):
+    return [_token_out(t) for t in db.query(ServiceToken).order_by(ServiceToken.id.desc())]
+
+
+@router.delete("/service-tokens/{token_id}")
+def revoke_service_token(token_id: int, db: Session = Depends(get_db),
+                         actor: User = Depends(get_current_user)):
+    """Revoke, never delete: the row is the record that the token existed."""
+    row = db.get(ServiceToken, token_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Service token not found")
+    if row.revoked_at is None:
+        row.revoked_at = dt.datetime.utcnow()
+        db.commit()
+        audit_service.record(db, "SERVICE_TOKEN", row.id, AuditAction.UPDATE, actor,
+                             new_value=f"revoked service token {row.name!r}")
+        db.commit()
+    return _token_out(row)

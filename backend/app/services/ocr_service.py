@@ -16,11 +16,15 @@ automatically since Personal Info already has its own name fields) is
 included for the reviewer to see and judge, even where the frontend's
 "Apply" has nothing to wire an informational-only field into.
 
-Runs OCR twice per document - once on a plain upscaled/autocontrasted
-image, once on an OpenCV adaptive-threshold "sketch" pass (CLAHE + Gaussian
-blur + adaptive threshold + morphology) - and merges whichever pass found
-each field, preferring the longer/more complete value when both found
-something different. The sketch pass and several of the field-pattern
+Runs OCR up to three times per document, each pass biased toward a
+different kind of bad source image: a plain upscaled/autocontrasted pass,
+an OpenCV adaptive-threshold "sketch" pass (CLAHE + Gaussian blur +
+adaptive threshold + morphology, for glare/shadow on a photographed
+laminated card), and a "photocopy" pass (denoise + Otsu global threshold
++ morphological closing, for a dark/low-contrast photocopy or scan where
+the first two passes can come back with nothing at all). The plain
+pass's own fields always win; a later pass only fills in what's still
+missing. The sketch pass and several of the field-pattern
 heuristics below (Driving Licence's controlled vehicle-class vocabulary,
 its DL-number formats, PAN's ordered-name-line fallback) are adapted from
 openbharatocr (github.com/essentiasoftserv/openbharatocr, Apache-2.0) -
@@ -142,6 +146,79 @@ def _load_image(image_bytes: bytes) -> Image.Image:
     return ImageOps.exif_transpose(image).convert("RGB")
 
 
+def _crop_to_content(image: Image.Image) -> Image.Image:
+    """A real test document (a photocopied ID card scanned as a full A4
+    page) exposed the single highest-impact fix here: the card itself
+    occupied roughly a third of the page's width and well under half its
+    height, with the rest blank margin - every downstream preprocessing
+    step upscales based on raw image width, so on an already-"wide"
+    2550px page that's actually mostly blank, the real text was still
+    tiny and Tesseract read almost nothing (one real PAN scan returned a
+    59-character wall of noise with no PAN number or name at all).
+    Finds the bounding box of all non-trivial ink on the page (ignoring
+    small flecks and allowing a gap between separate blocks, so a
+    front+back Aadhaar scan with the two halves apart still crops as one
+    region) and crops to it with a small margin, before any other
+    preprocessing runs - everything downstream then upscales from the
+    card's own resolution instead of the whole page's."""
+    arr = np.array(image.convert("L"))
+    # 200, not a near-white 235 - a real scan's faint JPEG/PNG compression
+    # gradient noise sat just under 235 across large swathes of otherwise
+    # blank page, chaining into one sprawling contour that pulled the
+    # crop back out to nearly the full page. 200 only catches genuinely
+    # dark print/ink.
+    _, mask = cv2.threshold(arr, 200, 255, cv2.THRESH_BINARY_INV)
+
+    # Filter out dust/scan-artifact specks BEFORE any dilation - a real
+    # scan had a handful of stray marks scattered near the page edges,
+    # and filtering by area AFTER bridging/dilating inflates even a
+    # single stray pixel into a large disk (a 126px-wide dilation kernel
+    # turns a 1px speck into a ~12,000px^2 blob), which passed the area
+    # threshold and pulled the crop back out to the full, mostly-blank
+    # page - the exact failure this function exists to fix.
+    raw_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_speck_area = 0.00003 * image.width * image.height
+    # A long, thin page-edge/binding-shadow/fold-crease line can have a
+    # perfectly large AREA despite being visually negligible (a real
+    # Aadhaar scan had one just 21px wide but 3400px tall, stretching the
+    # crop almost the full page height on its own) - area alone doesn't
+    # catch that, so also require the THINNER of the two bounding-box
+    # dimensions to be a reasonable size, which real text/card content
+    # blocks always have and a hairline scan artifact never does.
+    min_dimension = 0.008 * max(image.width, image.height)
+    cleaned = np.zeros_like(mask)
+    for c in raw_contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if cv2.contourArea(c) >= min_speck_area and min(w, h) >= min_dimension:
+            cv2.drawContours(cleaned, [c], -1, 255, thickness=cv2.FILLED)
+
+    # Bridge gaps (e.g. the blank strip between a front/back Aadhaar
+    # scan) so both halves end up as one connected region, now that only
+    # real content blocks remain to bridge between.
+    bridge = max(1, int(0.03 * max(image.width, image.height)))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (bridge, bridge))
+    bridged = cv2.dilate(cleaned, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(bridged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = [cv2.boundingRect(c) for c in contours]
+    if not boxes:
+        return image
+
+    x0 = min(b[0] for b in boxes)
+    y0 = min(b[1] for b in boxes)
+    x1 = max(b[0] + b[2] for b in boxes)
+    y1 = max(b[1] + b[3] for b in boxes)
+    pad = int(0.02 * max(image.width, image.height))
+    x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
+    x1, y1 = min(image.width, x1 + pad), min(image.height, y1 + pad)
+
+    # Didn't actually isolate anything useful (e.g. a near-blank or
+    # already-tightly-framed image) - leave it alone.
+    if (x1 - x0) < 0.1 * image.width or (y1 - y0) < 0.1 * image.height:
+        return image
+    return image.crop((x0, y0, x1, y1))
+
+
 def _preprocess_plain(image: Image.Image) -> Image.Image:
     gray = image.convert("L")
     if gray.width < 1500:
@@ -171,6 +248,38 @@ def _preprocess_sketch(image: Image.Image) -> Image.Image:
     return Image.fromarray(processed)
 
 
+def _preprocess_photocopy(image: Image.Image) -> Image.Image:
+    """Otsu global threshold + morphological closing - tuned for a dark/
+    low-contrast photocopy or scan rather than a photographed laminated
+    card. A real dark PAN photocopy returned nothing at all from both
+    the plain (autocontrast) and sketch (CLAHE + adaptive threshold)
+    passes - those two assume a roughly-even background with local
+    glare/shadow, which handles a phone photo well but not a uniformly
+    dark scan. Otsu picks a single global split point from the image's
+    own histogram, which keeps working even when the whole thing sits in
+    a dark, narrow brightness band, as long as text vs. background is
+    still bimodal - unlike autocontrast, which stretches based on
+    whatever the darkest/brightest pixels happen to be.
+
+    Deliberately NOT denoised first: denoising here was tested against
+    both a clean-but-dark and a speckled/noisy synthetic scan, and even
+    a mild strength reliably erased thin character strokes before Otsu
+    ever saw them, turning a perfectly readable dark image into nothing -
+    Otsu's own thresholding already tolerates moderate speckle noise
+    tolerably well on its own."""
+    arr = np.array(image)
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    if gray.shape[1] < 1500:
+        scale = 1500 / gray.shape[1]
+        gray = cv2.resize(gray, (int(gray.shape[1] * scale), int(gray.shape[0] * scale)), interpolation=cv2.INTER_LANCZOS4)
+
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = np.ones((2, 2), np.uint8)
+    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    return Image.fromarray(closed)
+
+
 def _tesseract_text(image: Image.Image) -> str:
     try:
         return pytesseract.image_to_string(image, lang="eng")
@@ -195,29 +304,44 @@ def _lines(text: str) -> list[str]:
     return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
 
-def _candidate_name_lines(lines: list[str]) -> list[int]:
-    """Indices of lines that look like a plain Latin name and aren't one
-    of the fixed boilerplate words every card prints (labels, headers)."""
+def _candidate_name_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """(line_index, extracted_name) pairs for lines that contain
+    something name-shaped - extracts the longest clean run of Latin
+    letters/spaces WITHIN a line rather than requiring the whole line to
+    be clean. A real Aadhaar scan's actual name line OCR'd as "8 | Konni
+    Krishna =" - the stray "8 |"/"=" noise bookending an otherwise
+    perfectly good name failed a whole-line match entirely, and a
+    completely unrelated 2-letter fragment elsewhere on the noisy page
+    won by default instead. Requires 2+ words or 5+ letters so a short
+    noise fragment doesn't qualify on its own."""
     out = []
     for i, line in enumerate(lines):
         if not _is_ascii(line):
             continue
-        cleaned = line.strip(_TRIM_CHARS)
-        if not _NAME_LINE_RE.match(cleaned):
-            continue
-        words = [w for w in re.split(r"\s+", cleaned.upper()) if w]
-        # startswith rather than == - Tesseract regularly drops the space
-        # after a boilerplate word ("GOVERNMENT OF" -> "GOVERNMENTOF"),
-        # which let a merged line slip past an exact-match stopword check
-        # in one real test and get picked as a "name" instead of rejected.
-        if not words or any(w.rstrip(".").startswith(nn) for w in words for nn in _NON_NAME_WORDS):
-            continue
-        # A line that's entirely Class-of-Vehicle codes (a merged "LMV
-        # MCWG" -> "LMVMCWG" reads as a perfectly name-shaped line) isn't
-        # a name - reuse the same decomposition used for dl_vehicle_class.
-        if _decompose_vehicle_token(cleaned.replace(" ", "")):
-            continue
-        out.append(i)
+        best = None
+        for m in re.finditer(r"[A-Za-z][A-Za-z.\s]{3,59}", line):
+            candidate = m.group(0).strip(_TRIM_CHARS)
+            if not candidate:
+                continue
+            words = [w for w in re.split(r"\s+", candidate.upper()) if w]
+            if len(words) < 2 and len(candidate) < 5:
+                continue
+            # startswith rather than == - Tesseract regularly drops the
+            # space after a boilerplate word ("GOVERNMENT OF" ->
+            # "GOVERNMENTOF"), which let a merged line slip past an
+            # exact-match stopword check in one real test and get picked
+            # as a "name" instead of rejected.
+            if not words or any(w.rstrip(".").startswith(nn) for w in words for nn in _NON_NAME_WORDS):
+                continue
+            # A run that's entirely Class-of-Vehicle codes (a merged
+            # "LMV MCWG" -> "LMVMCWG" reads as a perfectly name-shaped
+            # run) isn't a name - reuse the dl_vehicle_class decomposer.
+            if _decompose_vehicle_token(candidate.replace(" ", "")):
+                continue
+            if best is None or len(candidate) > len(best):
+                best = candidate
+        if best:
+            out.append((i, best))
     return out
 
 
@@ -238,9 +362,14 @@ def _extract_father_husband_name(text: str) -> str | None:
     Matched per physical line (not the whole multi-line text) - \\s in the
     capture group matches a literal newline too, which previously let
     this bleed straight into the NEXT printed line (one real test
-    produced "Suresh Kumar\\nDob" instead of stopping at "Kumar")."""
+    produced "Suresh Kumar\\nDob" instead of stopping at "Kumar").
+    Stops at the first comma/digit rather than requiring the rest of the
+    line to be pure letters - a real Aadhaar back-side scan prints
+    "Address: S/O Konni Appanna, 1-181/3, ..." with the house number and
+    rest of the address on the SAME line, which a stricter end-of-line
+    match rejected outright."""
     for line in _lines(text):
-        m = re.search(r"(?:S[/.]?O|D[/.]?O|W[/.]?O)[:\s]*([A-Za-z][A-Za-z ]{1,39})$", line, re.IGNORECASE)
+        m = re.search(r"(?:S[/.]?O|D[/.]?O|W[/.]?O)[:\s]*([A-Za-z][A-Za-z ]{1,39})", line, re.IGNORECASE)
         if m:
             candidate = m.group(1).strip(_TRIM_CHARS)
             if candidate and _is_ascii(candidate):
@@ -323,11 +452,11 @@ def _parse_aadhaar(text: str) -> dict:
             (i for i, l in enumerate(lines) if re.search(r"\bmale\b|\bfemale\b", l, re.IGNORECASE)), None,
         )
         if anchor is not None:
-            before = [i for i in name_lines if i < anchor]
+            before = [pair for pair in name_lines if pair[0] < anchor]
             chosen = before[-1] if before else name_lines[0]
         else:
             chosen = name_lines[0]
-        fields["aadhaar_name"] = lines[chosen].strip(_TRIM_CHARS).upper()
+        fields["aadhaar_name"] = chosen[1].upper()
 
     addr_idx = next((i for i, l in enumerate(lines) if re.search(r"^address\b", l, re.IGNORECASE)), None)
     if addr_idx is not None:
@@ -400,7 +529,7 @@ def _parse_pan(text: str) -> dict:
     # uses instead of relying on the label at all.
     name_lines = _candidate_name_lines(lines)
     if not fields["pan_name"] and name_lines:
-        fields["pan_name"] = lines[name_lines[0]].strip(_TRIM_CHARS).upper()
+        fields["pan_name"] = name_lines[0][1].upper()
 
     fathers_idx = next(
         (i for i, l in enumerate(lines) if re.search(r"father'?s?\s*name|husband'?s?\s*name", l, re.IGNORECASE)), None,
@@ -413,7 +542,7 @@ def _parse_pan(text: str) -> dict:
         # Name always precedes Father's/Husband's Name on a PAN card - the
         # second name-shaped line in print order, when the label itself
         # didn't survive OCR.
-        fields["father_husband_name"] = lines[name_lines[1]].strip(_TRIM_CHARS).upper()
+        fields["father_husband_name"] = name_lines[1][1].upper()
 
     return fields
 
@@ -444,7 +573,7 @@ def _parse_driving_licence(text: str) -> dict:
     if not fields["dl_holder_name"]:
         name_lines = _candidate_name_lines(lines)
         if name_lines:
-            fields["dl_holder_name"] = lines[name_lines[0]].strip(_TRIM_CHARS).upper()
+            fields["dl_holder_name"] = name_lines[0][1].upper()
 
     addr_idx = next((i for i, l in enumerate(lines) if re.search(r"^add(?:ress)?\b", l, re.IGNORECASE)), None)
     if addr_idx is not None:
@@ -612,7 +741,7 @@ def _parse_passbook(text: str) -> dict:
     if not fields["account_holder_name"]:
         name_lines = _candidate_name_lines(lines)
         if name_lines:
-            fields["account_holder_name"] = lines[name_lines[0]].strip(_TRIM_CHARS).upper()
+            fields["account_holder_name"] = name_lines[0][1].upper()
 
     return fields
 
@@ -644,19 +773,27 @@ def extract_document_fields(document_type_name: str | None, image_bytes: bytes, 
         raise ValueError("OCR extraction only supports image uploads (JPG/PNG) - this document was uploaded as a PDF")
 
     image = _load_image(image_bytes)
+    try:
+        image = _crop_to_content(image)
+    except Exception:
+        pass
     parser = _PARSERS[kind]
 
     plain_text = _tesseract_text(_preprocess_plain(image))
-    plain_fields = parser(plain_text)
+    fields = parser(plain_text)
 
-    try:
-        sketch_text = _tesseract_text(_preprocess_sketch(image))
-        sketch_fields = parser(sketch_text)
-        fields = _merge_fields(plain_fields, sketch_fields)
-    except Exception:
-        # The sketch pass is a best-effort second opinion - if OpenCV
-        # preprocessing itself fails on an unusual image, fall back to
-        # just the plain pass rather than failing the whole request.
-        fields = plain_fields
+    # Each later pass is a best-effort second/third opinion, biased
+    # toward a different kind of bad source image (sketch: glare/shadow
+    # on a photographed laminated card; photocopy: a dark, speckled
+    # photocopy/scan) - plain's own fields always win where it found
+    # something; a later pass only fills in what's still missing. If
+    # OpenCV preprocessing itself fails on an unusual image, that pass is
+    # just skipped rather than failing the whole request.
+    for preprocess in (_preprocess_sketch, _preprocess_photocopy):
+        try:
+            pass_text = _tesseract_text(preprocess(image))
+            fields = _merge_fields(fields, parser(pass_text))
+        except Exception:
+            continue
 
     return {"kind": kind, "fields": fields, "extracted_count": sum(1 for v in fields.values() if v)}

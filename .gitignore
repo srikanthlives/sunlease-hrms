@@ -52,3 +52,7 @@ Thumbs.db
 # Logs
 *.log
 nohup.out
+
+# Real ID-document scans used for local OCR testing (services/ocr_service.py)
+# - never committed, contains a real person's actual Aadhaar/PAN/bank details.
+/testdata
