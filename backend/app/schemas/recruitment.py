@@ -1,6 +1,6 @@
 from datetime import date
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.validators import validate_aadhaar, validate_email_format, validate_mobile, validate_pan, validate_pincode
 
@@ -53,6 +53,10 @@ class CandidateTransferIn(BaseModel):
     applied_cost_center_id: int
     applied_project_id: int
     remarks: str | None = None
+
+
+class CandidateBulkTransferIn(CandidateTransferIn):
+    candidate_ids: list[int] = Field(min_length=1)
 
 
 class CandidateIn(BaseModel):

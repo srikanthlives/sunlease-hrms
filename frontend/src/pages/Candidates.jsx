@@ -166,6 +166,12 @@ export default function Candidates() {
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  // Bulk transfer: the ids ticked in the list, plus the destination form once opened.
+  const [picked, setPicked] = useState([]);
+  const [transferForm, setTransferForm] = useState(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferResult, setTransferResult] = useState(null);
+  const [transferError, setTransferError] = useState("");
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
@@ -249,6 +255,35 @@ export default function Candidates() {
       setError(apiErrorMessage(err));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // A CONVERTED or REJECTED candidate cannot be transferred (the backend refuses
+  // it), so those rows are shown but not tickable - the selection can never be
+  // one the server will reject wholesale.
+  const transferable = (c) => c.status !== "CONVERTED" && c.status !== "REJECTED";
+  function togglePick(id) {
+    setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  async function transferSelected() {
+    setTransferError("");
+    setTransferBusy(true);
+    try {
+      const res = await client.post("/recruitment/candidates-transfer", {
+        candidate_ids: picked,
+        applied_cost_center_id: Number(transferForm.applied_cost_center_id),
+        applied_project_id: Number(transferForm.applied_project_id),
+        remarks: transferForm.remarks || null,
+      });
+      setTransferResult(res.data);
+      setTransferForm(null);
+      setPicked([]);
+      reload();
+    } catch (err) {
+      setTransferError(apiErrorMessage(err));
+    } finally {
+      setTransferBusy(false);
     }
   }
 
@@ -340,6 +375,31 @@ export default function Candidates() {
   const sortedCandidates = useMemo(() => sortRows(visibleCandidates, ALL_COLUMNS, sort), [visibleCandidates, sort]);
   useEffect(() => setPage(1), [sort]);
   const { pageRows, page: safePage, pageCount, total } = usePagination(sortedCandidates, page, pageSize);
+
+  // The header tick selects everything transferable on THIS page, not the whole
+  // filtered set - a page is what the operator can actually see and vouch for.
+  const pickablePage = pageRows.filter(transferable);
+  const pageAllPicked = pickablePage.length > 0 && pickablePage.every((r) => picked.includes(r.id));
+  const pickedRows = candidates.filter((c) => picked.includes(c.id));
+  const selectColumn = {
+    key: "_pick", header: (
+      <input
+        type="checkbox" className="rounded border-ink/30" checked={pageAllPicked}
+        title={pageAllPicked ? "Clear this page" : "Select every transferable candidate on this page"}
+        onChange={() => setPicked((prev) => (pageAllPicked
+          ? prev.filter((id) => !pickablePage.some((r) => r.id === id))
+          : [...new Set([...prev, ...pickablePage.map((r) => r.id)])]))}
+      />
+    ),
+    sticky: true, stickyWidth: 40, noTruncate: true,
+    render: (r) => (transferable(r) ? (
+      <input
+        type="checkbox" className="rounded border-ink/30" checked={picked.includes(r.id)}
+        onClick={(e) => e.stopPropagation()} onChange={() => togglePick(r.id)}
+        title={`Select ${r.reference_number || r.first_name}`}
+      />
+    ) : <span className="text-ink/20" title={`A ${r.status} candidate cannot be transferred`}>—</span>),
+  };
 
   const canCreate = form.first_name && form.last_name && form.applied_designation_id
     && form.applied_employee_category_id && form.applied_cost_center_id && form.applied_project_id
@@ -577,10 +637,26 @@ export default function Candidates() {
             )}
           </div>
         </div>
+        {picked.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-brand-800/20 bg-brand-50 px-3 py-2">
+            <span className="text-sm font-semibold text-ink">{picked.length} selected</span>
+            {pickedRows.some((r) => r.status === "APPROVED") && (
+              <span className="text-xs text-ink/50">
+                {pickedRows.filter((r) => r.status === "APPROVED").length} already Approved — those go in as Change Requests.
+              </span>
+            )}
+            <span className="ml-auto flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setPicked([])} className="gap-1"><X size={14} /> Clear</Button>
+              <Button size="sm" onClick={() => { setTransferError(""); setTransferForm({ applied_cost_center_id: "", applied_project_id: "", remarks: "" }); }}>
+                Transfer Selected
+              </Button>
+            </span>
+          </div>
+        )}
         <Table
           sort={sort} onSortChange={setSort}
           singleLine
-          columns={columns} rows={pageRows} onRowClick={(r) => navigate(`/recruitment/candidates/${r.id}`)}
+          columns={[selectColumn, ...columns]} rows={pageRows} onRowClick={(r) => navigate(`/recruitment/candidates/${r.id}`)}
           empty={candidates.length === 0 ? "No candidates yet." : "No candidates match the current filters."}
           stickyHeader
         />
@@ -589,6 +665,77 @@ export default function Candidates() {
           onPageChange={setPage} onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
         />
       </Card>
+
+      {transferForm && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => !transferBusy && setTransferForm(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-1">Transfer {picked.length} Candidate{picked.length === 1 ? "" : "s"}</h3>
+            <p className="text-xs text-ink/50 mb-4">
+              All of them move to the one Cost Center and Project below. Reference numbers stay
+              the same. The whole batch is applied together — if any one of them cannot move,
+              nothing does and you are told why.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <Select label="Transfer to Cost Center*" value={transferForm.applied_cost_center_id}
+                onChange={(e) => setTransferForm({ ...transferForm, applied_cost_center_id: e.target.value, applied_project_id: "" })}>
+                <option value="">Select...</option>
+                {costCenters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+              <Select label="Project*" value={transferForm.applied_project_id}
+                onChange={(e) => setTransferForm({ ...transferForm, applied_project_id: e.target.value })}>
+                <option value="">Select...</option>
+                {projects.filter((p) => String(p.cost_center_id) === String(transferForm.applied_cost_center_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Select>
+              <Input label="Remarks" value={transferForm.remarks} onChange={(e) => setTransferForm({ ...transferForm, remarks: e.target.value })} />
+            </div>
+            <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-ink/10">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-ink/[0.03] text-left text-ink/40 uppercase tracking-wide">
+                  <tr><th className="px-2 py-1.5">Reference #</th><th className="px-2 py-1.5">Name</th>
+                    <th className="px-2 py-1.5">From</th><th className="px-2 py-1.5">Status</th></tr>
+                </thead>
+                <tbody>
+                  {pickedRows.map((r) => (
+                    <tr key={r.id} className="border-t border-ink/5">
+                      <td className="px-2 py-1 font-mono">{r.reference_number || "—"}</td>
+                      <td className="px-2 py-1">{r.first_name} {r.last_name}</td>
+                      <td className="px-2 py-1 text-ink/50">{r.cost_center_name || "—"}{r.applied_project_name ? ` / ${r.applied_project_name}` : ""}</td>
+                      <td className="px-2 py-1"><StatusBadge status={r.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {transferError && <div className="mt-3 text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{transferError}</div>}
+            <div className="flex gap-2 mt-4">
+              <Button onClick={transferSelected}
+                disabled={transferBusy || !transferForm.applied_cost_center_id || !transferForm.applied_project_id}>
+                {transferBusy ? "Transferring..." : "Confirm Transfer"}
+              </Button>
+              <Button variant="outline" onClick={() => setTransferForm(null)} disabled={transferBusy}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {transferResult && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setTransferResult(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-3">Transfer Complete</h3>
+            <p className="text-sm text-ink/80">
+              <strong>{transferResult.transferred}</strong> transferred
+              {transferResult.submitted_for_approval > 0 && <> · <strong>{transferResult.submitted_for_approval}</strong> submitted for approval</>}
+            </p>
+            {transferResult.submitted_for_approval > 0 && (
+              <p className="text-xs text-ink/50 mt-2">
+                Already-Approved candidates cannot be overwritten directly, so their move is queued as a
+                Change Request and takes effect once approved: {transferResult.queued_references.join(", ")}
+              </p>
+            )}
+            <div className="mt-4"><Button onClick={() => setTransferResult(null)}>Close</Button></div>
+          </div>
+        </div>
+      )}
 
       {bulkOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={closeBulkModal}>

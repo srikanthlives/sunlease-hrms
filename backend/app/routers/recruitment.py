@@ -14,7 +14,7 @@ from app.models.models import (
     DesignationCriteria, Project, SelectionCriteria, User,
 )
 from app.schemas.recruitment import (
-    CandidateIn, CandidateInterestIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
+    CandidateBulkTransferIn, CandidateIn, CandidateInterestIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
 from app.services import audit_service, candidate_bulk_import_service, document_service, employee_service, licence_service, ocr_service, permission_service, recruitment_service
@@ -425,6 +425,68 @@ def transfer_candidate(candidate_id: int, payload: CandidateTransferIn, db: Sess
     db.commit()
     db.refresh(candidate)
     return {**_candidate_detail_dict(db, candidate), **result}
+
+
+@router.post("/candidates-transfer", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def transfer_candidates(payload: CandidateBulkTransferIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Moves a whole selection of candidates to one Cost Center/Project.
+
+    All or nothing: the selection is vetted read-only first and, if anything
+    in it cannot move, nothing does and every reason is reported together -
+    a half-applied transfer list leaves no record of which half went
+    through. Each candidate keeps its own approval behaviour, so one batch
+    can come back part transferred and part queued as change requests.
+    """
+    _check_applied_scope(db, user, payload.applied_cost_center_id, payload.applied_project_id)
+    _check_project_in_cost_center(db, payload.applied_cost_center_id, payload.applied_project_id)
+
+    movable, problems = [], []
+    for candidate_id in dict.fromkeys(payload.candidate_ids):          # tolerate a repeated id
+        candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
+        if not candidate:
+            problems.append((str(candidate_id), "candidate not found"))
+            continue
+        who = candidate.reference_number or f"candidate {candidate_id}"
+        try:
+            if candidate.status in ("CONVERTED", "REJECTED"):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"a {candidate.status} candidate cannot be transferred")
+            _check_applied_scope(db, user, candidate.applied_cost_center_id, candidate.applied_project_id)
+            if (candidate.applied_cost_center_id == payload.applied_cost_center_id
+                    and candidate.applied_project_id == payload.applied_project_id):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "already in this Cost Center and Project")
+        except HTTPException as exc:
+            problems.append((who, str(exc.detail)))
+            continue
+        movable.append(candidate)
+
+    if problems:
+        listed = "; ".join(f"{who}: {why}" for who, why in problems[:5])
+        more = f" and {len(problems) - 5} more" if len(problems) > 5 else ""
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Nothing was transferred. {len(problems)} of {len(problems) + len(movable)} cannot move - {listed}{more}",
+        )
+
+    queued = []
+    for candidate in movable:
+        old = f"cost_center={candidate.applied_cost_center_id}, project={candidate.applied_project_id}"
+        result = recruitment_service.save_or_request_candidate_update(
+            db, candidate,
+            {"applied_cost_center_id": payload.applied_cost_center_id, "applied_project_id": payload.applied_project_id},
+            user,
+        )
+        verb = "transfer requested" if result["submitted_for_approval"] else "transferred"
+        if result["submitted_for_approval"]:
+            queued.append(candidate.reference_number)
+        audit_service.record(
+            db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user, old_value=old,
+            new_value=f"{verb} to cost_center={payload.applied_cost_center_id}, project={payload.applied_project_id}"
+                      f" (reference {candidate.reference_number} unchanged, part of a bulk transfer)"
+                      + (f" - {payload.remarks}" if payload.remarks else ""),
+        )
+    db.commit()
+    return {"transferred": len(movable) - len(queued), "submitted_for_approval": len(queued),
+            "queued_references": queued}
 
 
 @router.post("/candidates/{candidate_id}/submit", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

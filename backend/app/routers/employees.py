@@ -20,7 +20,7 @@ from app.models.models import (
 from app.schemas.employees import (
     PersonalInfoStep, AddressStep, EmploymentInfoStep, OrgAssignmentStep, CostAllocationIn,
     StatutoryInfoStep, BankAccountStep, DependentIn, NomineeIn, SeparationIn, SeparationChecklistUpdate,
-    ChangeRequestReview, DrivingLicenceStep, RejoinIn, TransferIn,
+    ChangeRequestReview, DrivingLicenceStep, RejoinIn, TransferIn, BulkTransferIn,
 )
 from app.services import (
     audit_service, employee_service, approval_service, permission_service,
@@ -970,6 +970,155 @@ def cancel_transfer(episode_id: int, db: Session = Depends(get_db), user: User =
     transfer_service.cancel_transfer(db, transfer, user)
     db.commit()
     return {"ok": True}
+
+
+def _vet_for_transfer(
+    db: Session, user: User, episode_id: int, destination_cost_center_id: int, transfer_date: date,
+) -> tuple[EmploymentEpisode | None, str | None]:
+    """Read-only: can this one stint start a transfer to the destination?
+    Returns (episode, reason-it-cannot) - exactly the guards
+    transfer_service.initiate_transfer enforces, checked without touching
+    anything, so a bulk request can be refused before any of it is applied."""
+    episode = db.query(EmploymentEpisode).filter(EmploymentEpisode.id == episode_id).first()
+    if not episode:
+        return None, "employee record not found"
+    if not permission_service.can_see_cost_center(db, user, employee_service.home_cost_center_id(db, episode.id)):
+        return episode, "outside your Cost Center scope"
+    if episode.status != EpisodeStatus.ACTIVE:
+        return episode, f"only an Active employee can be transferred (this one is {episode.status})"
+    if db.query(EmployeeTransfer).filter(
+        EmployeeTransfer.employee_id == episode.employee_id, EmployeeTransfer.status == "INITIATED",
+    ).first():
+        return episode, "a transfer is already in progress for this employee"
+    if employee_service.home_cost_center_id(db, episode.id) == destination_cost_center_id:
+        return episode, "already in this Cost Center - change the Project/Department directly instead"
+    if episode.date_of_joining and transfer_date <= episode.date_of_joining:
+        return episode, f"transfer date must be after this employee's joining date ({episode.date_of_joining})"
+    return episode, None
+
+
+@router.get("-transfer-preflight")
+def transfer_preflight(
+    cost_center_id: int,
+    transfer_date: date,
+    episode_ids: str = Query(..., description="Comma-separated episode ids"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """What the bulk Transfer dialog needs before it can be filled in: for
+    each selected employee, whether they can move at all, and whether they
+    already hold a number in the destination Cost Center (it comes back) or
+    need a new one typed in. Read-only - nothing is transferred here."""
+    if not permission_service.can_see_cost_center(db, user, cost_center_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to the destination Cost Center")
+    try:
+        ids = list(dict.fromkeys(int(part) for part in episode_ids.split(",") if part.strip()))
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "episode_ids must be comma-separated numbers")
+    if not ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Select at least one employee")
+
+    rows = []
+    for episode_id in ids:
+        episode, reason = _vet_for_transfer(db, user, episode_id, cost_center_id, transfer_date)
+        held = employee_service.number_for_cost_center(db, episode.employee_id, cost_center_id) if episode else None
+        rows.append({
+            "episode_id": episode_id,
+            "employee_number": episode.employee_number if episode else None,
+            "name": f"{episode.employee.first_name} {episode.employee.last_name}" if episode else None,
+            "status": episode.status if episode else None,
+            "from_cost_center": (db.query(CostCenter.name).filter(
+                CostCenter.id == employee_service.home_cost_center_id(db, episode.id)).scalar() if episode else None),
+            "destination_employee_number": held[0] if held else None,
+            "needs_new_number": reason is None and not held,
+            "blocked_reason": reason,
+        })
+    return {"employees": rows, "blocked": sum(1 for r in rows if r["blocked_reason"])}
+
+
+@router.post("-transfer", dependencies=[Depends(require_permission(Permission.EMPLOYEE_SEPARATE))])
+def transfer_employees(payload: BulkTransferIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Starts a Cost Center transfer for a whole selection at once, to the
+    one destination Cost Center/Project/Department and date.
+
+    All or nothing: the selection is vetted read-only first and, if
+    anything in it cannot move, nothing does and every reason is reported
+    together - a half-applied transfer of twenty people leaves no record of
+    which half went through. Each employee still gets their own exit on the
+    old record and their own draft record in the destination, approved the
+    usual way - this only saves opening the dialog twenty times.
+    """
+    if not permission_service.can_see_cost_center(db, user, payload.cost_center_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not assigned to the destination Cost Center")
+    project = db.query(Project).filter(Project.id == payload.project_id).first()
+    if not project or project.cost_center_id != payload.cost_center_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Project does not belong to the selected Cost Center")
+    if not db.query(Department).filter(Department.id == payload.department_id, Department.is_active.is_(True)).first():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Department not found")
+    if payload.transfer_type not in (transfer_service.INTERNAL, transfer_service.RESIGNATION):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Transfer type must be INTERNAL or RESIGNATION")
+
+    movable, problems, claimed = [], [], {}
+    # A repeated episode id counts once, keeping the first number typed for
+    # it, and the selection's own order is preserved.
+    unique = {}
+    for item in payload.employees:
+        unique.setdefault(item.episode_id, item)
+    for item in unique.values():
+        episode, reason = _vet_for_transfer(db, user, item.episode_id, payload.cost_center_id, payload.transfer_date)
+        who = (episode.employee_number if episode else None) or f"record {item.episode_id}"
+        if reason:
+            problems.append((who, reason))
+            continue
+        held = employee_service.number_for_cost_center(db, episode.employee_id, payload.cost_center_id)
+        number = held[0] if held else (item.employee_number or "").strip()
+        if not number:
+            problems.append((who, "a new Employee Number is required for this Cost Center"))
+            continue
+        if number in claimed:
+            problems.append((who, f"Employee Number {number} is also given to {claimed[number]} in this batch"))
+            continue
+        try:
+            employee_service.check_number_available(db, number, episode.employee_id, payload.cost_center_id)
+        except HTTPException as exc:
+            problems.append((who, f"{number}: {exc.detail}"))
+            continue
+        claimed[number] = who
+        movable.append((episode, number))
+
+    if problems:
+        listed = "; ".join(f"{who}: {why}" for who, why in problems[:5])
+        more = f" and {len(problems) - 5} more" if len(problems) > 5 else ""
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Nothing was transferred. {len(problems)} of {len(problems) + len(movable)} cannot move - {listed}{more}",
+        )
+
+    transferred = []
+    try:
+        for episode, number in movable:
+            transfer = transfer_service.initiate_transfer(
+                db, episode, transfer_type=payload.transfer_type, cost_center_id=payload.cost_center_id,
+                project_id=payload.project_id, department_id=payload.department_id,
+                transfer_date=payload.transfer_date, employee_number=number,
+                remarks=(f"{payload.remarks} (bulk transfer)" if payload.remarks else "Bulk transfer"),
+                user=user,
+            )
+            transferred.append({
+                "episode_id": episode.id, "employee_number": episode.employee_number,
+                "transfer_id": transfer.id, "new_episode_id": transfer.to_episode_id,
+                "new_employee_number": number,
+            })
+    except HTTPException as exc:
+        # Vetting passed but something still refused: undo the whole batch
+        # rather than leave part of a transfer list applied.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Nothing was transferred - the batch was rolled back because one employee was refused: {exc.detail}",
+        )
+    db.commit()
+    return {"transferred": len(transferred), "employees": transferred}
 
 
 @router.post("/{episode_id}/separation/cancel", dependencies=[Depends(require_permission(Permission.EMPLOYEE_SEPARATE))])

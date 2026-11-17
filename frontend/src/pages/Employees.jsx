@@ -4,6 +4,7 @@ import { SlidersHorizontal, X, Upload, Download, Pencil, Trash2, FileText, Eye, 
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, sortRows, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
+import { useAuth } from "../context/AuthContext";
 
 const ALL_COLUMNS = [
   {
@@ -99,7 +100,20 @@ function uniqueValues(rows, key) {
 
 export default function Employees() {
   const navigate = useNavigate();
+  const { can } = useAuth();
   const [rows, setRows] = useState([]);
+  // Bulk transfer: the episode ids ticked in the list, the destination form
+  // once opened, and the preflight answer that says who needs a new number.
+  const [picked, setPicked] = useState([]);
+  const [moveForm, setMoveForm] = useState(null);
+  const [moveNumbers, setMoveNumbers] = useState({});   // episode_id -> typed number
+  const [preflight, setPreflight] = useState(null);     // { employees, blocked } | null
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [moveResult, setMoveResult] = useState(null);
+  const [moveError, setMoveError] = useState("");
+  const [costCenters, setCostCenters] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -129,6 +143,12 @@ export default function Employees() {
   }
 
   useEffect(reload, []);
+
+  useEffect(() => {
+    Promise.all([client.get("/cost-centers"), client.get("/projects"), client.get("/departments")])
+      .then(([cc, pr, de]) => { setCostCenters(cc.data); setProjects(pr.data); setDepartments(de.data); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(VISIBLE_COLUMNS_KEY, JSON.stringify([...visibleColumns]));
@@ -252,7 +272,98 @@ export default function Employees() {
     }
   }
 
+  // Only an ACTIVE record can start a transfer (the backend refuses anything
+  // else), so other rows are shown but not tickable - the selection can never
+  // be one the server will reject wholesale.
+  const transferable = (r) => r.status === "ACTIVE";
+  const canTransfer = can("employee.separate");
+
+  function togglePick(id) {
+    setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function openMove() {
+    setMoveError("");
+    setPreflight(null);
+    setMoveNumbers({});
+    setMoveForm({ transfer_type: "INTERNAL", cost_center_id: "", project_id: "", department_id: "", transfer_date: "", remarks: "" });
+  }
+
+  // The destination Cost Center and date decide who needs a new number and
+  // who already holds one there, so the preflight re-runs whenever either
+  // changes - the dialog can't ask for the right numbers before it knows.
+  useEffect(() => {
+    if (!moveForm?.cost_center_id || !moveForm?.transfer_date || picked.length === 0) {
+      setPreflight(null);
+      return;
+    }
+    let live = true;
+    client.get("/employees-transfer-preflight", {
+      params: { cost_center_id: moveForm.cost_center_id, transfer_date: moveForm.transfer_date, episode_ids: picked.join(",") },
+    })
+      .then((res) => { if (live) { setPreflight(res.data); setMoveError(""); } })
+      .catch((err) => { if (live) { setPreflight(null); setMoveError(apiErrorMessage(err)); } });
+    return () => { live = false; };
+  }, [moveForm?.cost_center_id, moveForm?.transfer_date, picked.join(",")]);
+
+  async function transferSelected() {
+    setMoveError("");
+    setMoveBusy(true);
+    try {
+      const res = await client.post("/employees-transfer", {
+        transfer_type: moveForm.transfer_type,
+        cost_center_id: Number(moveForm.cost_center_id),
+        project_id: Number(moveForm.project_id),
+        department_id: Number(moveForm.department_id),
+        transfer_date: moveForm.transfer_date,
+        remarks: moveForm.remarks || null,
+        employees: picked.map((id) => ({ episode_id: id, employee_number: moveNumbers[id] || null })),
+      });
+      setMoveResult(res.data);
+      setMoveForm(null);
+      setPicked([]);
+      reload();
+    } catch (err) {
+      setMoveError(apiErrorMessage(err));
+    } finally {
+      setMoveBusy(false);
+    }
+  }
+
+  // The header tick selects everything transferable on THIS page, not the
+  // whole filtered set - a page is what the operator can actually see and
+  // vouch for.
+  const pickablePage = pageRows.filter(transferable);
+  const pageAllPicked = pickablePage.length > 0 && pickablePage.every((r) => picked.includes(r.episode_id));
+  const pickedRows = rows.filter((r) => picked.includes(r.episode_id));
+  const selectColumn = {
+    key: "_pick",
+    header: (
+      <input
+        type="checkbox" className="rounded border-ink/30" checked={pageAllPicked}
+        title={pageAllPicked ? "Clear this page" : "Select every transferable employee on this page"}
+        onChange={() => setPicked((prev) => (pageAllPicked
+          ? prev.filter((id) => !pickablePage.some((r) => r.episode_id === id))
+          : [...new Set([...prev, ...pickablePage.map((r) => r.episode_id)])]))}
+      />
+    ),
+    sticky: true, stickyWidth: 40, noTruncate: true,
+    render: (r) => (transferable(r) ? (
+      <input
+        type="checkbox" className="rounded border-ink/30" checked={picked.includes(r.episode_id)}
+        onClick={(e) => e.stopPropagation()} onChange={() => togglePick(r.episode_id)}
+        title={`Select ${r.employee_number || r.first_name}`}
+      />
+    ) : <span className="text-ink/20" title={`Only an Active employee can be transferred (this one is ${r.status})`}>—</span>),
+  };
+
+  const preflightById = Object.fromEntries((preflight?.employees || []).map((e) => [e.episode_id, e]));
+  const missingNumbers = (preflight?.employees || []).filter((e) => e.needs_new_number && !(moveNumbers[e.episode_id] || "").trim());
+  const moveReady = moveForm && moveForm.cost_center_id && moveForm.project_id && moveForm.department_id
+    && moveForm.transfer_date && preflight && preflight.blocked === 0 && missingNumbers.length === 0;
+
   const columns = [
+    ...(canTransfer ? [selectColumn] : []),
     ...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)).map((c) => (
       c.key === "documents"
         ? {
@@ -363,6 +474,19 @@ export default function Employees() {
           {filteredRows.length} of {rows.length} employee{rows.length === 1 ? "" : "s"}
         </div>
 
+        {canTransfer && picked.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-brand-800/20 bg-brand-50 px-3 py-2">
+            <span className="text-sm font-semibold text-ink">{picked.length} selected</span>
+            <span className="text-xs text-ink/50">
+              Each one gets an exit on their current record and a new record in the destination Cost Center.
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setPicked([])} className="gap-1"><X size={14} /> Clear</Button>
+              <Button size="sm" onClick={openMove}>Transfer Selected</Button>
+            </span>
+          </div>
+        )}
+
         {loading ? (
           <div className="text-sm text-ink/40 py-10 text-center">Loading…</div>
         ) : (
@@ -384,6 +508,150 @@ export default function Employees() {
           </>
         )}
       </Card>
+
+      {moveForm && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => !moveBusy && setMoveForm(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-1">
+              Transfer {picked.length} Employee{picked.length === 1 ? "" : "s"}
+            </h3>
+            <p className="text-xs text-ink/50 mb-4">
+              A Cost Center change is a transfer, not an edit: exit formalities start on each current
+              record and a draft record opens in the destination, each approved the usual way. Attendance
+              and salary history stays behind on the old record. The whole batch is applied together — if
+              any one of them cannot move, nothing does and you are told why.
+            </p>
+            <Select label="Transfer type" value={moveForm.transfer_type}
+              onChange={(e) => setMoveForm({ ...moveForm, transfer_type: e.target.value })}>
+              <option value="INTERNAL">Internal transfer — service continues, leave/gratuity retained, no final settlement</option>
+              <option value="RESIGNATION">Resignation and joining elsewhere — separate service, final settlement calculated automatically on exit approval</option>
+            </Select>
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <Select label="Transfer to Cost Center*" value={moveForm.cost_center_id}
+                onChange={(e) => setMoveForm({ ...moveForm, cost_center_id: e.target.value, project_id: "" })}>
+                <option value="">Select...</option>
+                {costCenters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+              <Select label="Project*" value={moveForm.project_id}
+                onChange={(e) => setMoveForm({ ...moveForm, project_id: e.target.value })}>
+                <option value="">Select...</option>
+                {projects.filter((p) => String(p.cost_center_id) === String(moveForm.cost_center_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Select>
+              <Select label="Department*" value={moveForm.department_id}
+                onChange={(e) => setMoveForm({ ...moveForm, department_id: e.target.value })}>
+                <option value="">Select...</option>
+                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </Select>
+              <Input label="Transfer date*" type="date" value={moveForm.transfer_date}
+                onChange={(e) => setMoveForm({ ...moveForm, transfer_date: e.target.value })} />
+            </div>
+            <div className="mt-3">
+              <Input label="Remarks" value={moveForm.remarks} onChange={(e) => setMoveForm({ ...moveForm, remarks: e.target.value })} />
+            </div>
+
+            <div className="mt-4 text-xs text-ink/50">
+              {!preflight
+                ? "Choose the destination Cost Center and the transfer date to see which of them need a new Employee Number."
+                : "An Employee Number identifies a person within a Cost Center, so everyone needs their own in the destination — except anyone who served there before, whose old number comes back."}
+            </div>
+            <div className="mt-2 rounded-md border border-ink/10 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-ink/[0.03] text-left text-ink/40 uppercase tracking-wide">
+                  <tr>
+                    <th className="px-2 py-1.5">Employee No.</th>
+                    <th className="px-2 py-1.5">Name</th>
+                    <th className="px-2 py-1.5">From</th>
+                    <th className="px-2 py-1.5">New Employee No.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pickedRows.map((r) => {
+                    const pf = preflightById[r.episode_id];
+                    return (
+                      <tr key={r.episode_id} className="border-t border-ink/5">
+                        <td className="px-2 py-1 font-mono">{r.employee_number || "—"}</td>
+                        <td className="px-2 py-1">{r.first_name} {r.last_name}</td>
+                        <td className="px-2 py-1 text-ink/50">{r.cost_center || "—"}{r.project ? ` / ${r.project}` : ""}</td>
+                        <td className="px-2 py-1">
+                          {!pf ? <span className="text-ink/30">—</span>
+                            : pf.blocked_reason ? <span className="text-danger">{pf.blocked_reason}</span>
+                            : pf.destination_employee_number ? (
+                              <span className="font-mono text-ink/60" title="Served this Cost Center before — the old number comes back">
+                                {pf.destination_employee_number} <span className="font-sans text-ink/40">(reused)</span>
+                              </span>
+                            ) : (
+                              <input
+                                className="w-36 rounded border border-ink/20 px-2 py-1 font-mono"
+                                placeholder="Required" value={moveNumbers[r.episode_id] || ""}
+                                onChange={(e) => setMoveNumbers({ ...moveNumbers, [r.episode_id]: e.target.value })}
+                              />
+                            )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {preflight?.blocked > 0 && (
+              <div className="mt-3 text-sm text-danger bg-danger/10 rounded-md px-3 py-2">
+                {preflight.blocked} of {picked.length} cannot be transferred (see the reasons above). Nothing can
+                be sent until they are removed from the selection.
+              </div>
+            )}
+            {missingNumbers.length > 0 && preflight?.blocked === 0 && (
+              <div className="mt-3 text-xs text-ink/50">
+                {missingNumbers.length} still need{missingNumbers.length === 1 ? "s" : ""} a new Employee Number.
+              </div>
+            )}
+            {moveError && <div className="mt-3 text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{moveError}</div>}
+            <div className="flex gap-2 mt-4">
+              <Button onClick={transferSelected} disabled={moveBusy || !moveReady}>
+                {moveBusy ? "Transferring..." : "Confirm Transfer"}
+              </Button>
+              <Button variant="outline" onClick={() => setMoveForm(null)} disabled={moveBusy}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {moveResult && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setMoveResult(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-2">Transfer Started</h3>
+            <p className="text-sm text-ink/80">
+              <strong>{moveResult.transferred}</strong> employee{moveResult.transferred === 1 ? "" : "s"} put into
+              Notice Period, each with a draft record waiting in the destination Cost Center.
+            </p>
+            <p className="text-xs text-ink/50 mt-2">
+              Each transfer completes once the exit is approved and the new record is approved — the new record
+              cannot go live before the exit is completed, so nobody ever has two live records.
+            </p>
+            <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-ink/10">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-ink/[0.03] text-left text-ink/40 uppercase tracking-wide">
+                  <tr><th className="px-2 py-1.5">Old No.</th><th className="px-2 py-1.5">New No.</th><th className="px-2 py-1.5"></th></tr>
+                </thead>
+                <tbody>
+                  {(moveResult.employees || []).map((e) => (
+                    <tr key={e.episode_id} className="border-t border-ink/5">
+                      <td className="px-2 py-1 font-mono">{e.employee_number}</td>
+                      <td className="px-2 py-1 font-mono">{e.new_employee_number}</td>
+                      <td className="px-2 py-1 text-right">
+                        <button className="text-brand-600 hover:underline"
+                          onClick={() => { setMoveResult(null); navigate(`/employees/${e.new_episode_id}`); }}>
+                          Open new record
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4"><Button onClick={() => setMoveResult(null)}>Close</Button></div>
+          </div>
+        </div>
+      )}
 
       {bulkOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={closeBulkModal}>

@@ -211,6 +211,26 @@ class TransferIn(BaseModel):
     remarks: str | None = None
 
 
+class BulkTransferItem(BaseModel):
+    """One employee in a bulk transfer. The number is per person, not per
+    batch - everyone needs their own in a Cost Center they never served
+    (and none at all in one they did, where the old number comes back)."""
+    episode_id: int
+    employee_number: str | None = None
+
+
+class BulkTransferIn(BaseModel):
+    """One destination for a whole selection; the per-employee part is the
+    employee number, carried on each item."""
+    transfer_type: str  # INTERNAL / RESIGNATION
+    cost_center_id: int
+    project_id: int
+    department_id: int
+    transfer_date: date  # joining date in the new Cost Center
+    remarks: str | None = None
+    employees: list[BulkTransferItem] = Field(min_length=1)
+
+
 class SeparationIn(BaseModel):
     separation_type: str | None = None
     resignation_date: date | None = None

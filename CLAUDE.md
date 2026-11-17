@@ -184,6 +184,42 @@ substantially reworked:**
   above) instead of erroring "already in use". `import_workbook` returns
   `{created, updated, submitted_for_approval, errors}`.
 
+**Bulk transfer across Cost Centers** (employees and candidates) — one
+selection, one destination, applied all-or-nothing. Both endpoints vet the
+whole selection read-only first and, if anything in it cannot move, nothing
+does and every reason comes back in one 400 (`"Nothing was transferred. N of
+M cannot move - ..."`); a half-applied transfer list leaves no record of
+which half went through. Neither is a new code path for the move itself —
+each reuses the existing single-record service so a batch of twenty produces
+exactly what twenty dialogs would:
+- `POST /employees-transfer` (`BulkTransferIn`, `Permission.EMPLOYEE_SEPARATE`)
+  loops `transfer_service.initiate_transfer`, so every employee still gets a
+  real exit on their current record plus a draft record in the destination,
+  each approved the usual way. The per-employee part is the **employee
+  number** (a number identifies a person *within* a Cost Center, and nothing
+  in this codebase auto-generates one), so the payload carries
+  `employees: [{episode_id, employee_number}]` rather than a flat id list,
+  and `GET /employees-transfer-preflight?cost_center_id=&transfer_date=&episode_ids=`
+  tells the dialog, per selected row, whether it can move at all and whether
+  a number is needed or an old one comes back. Batch-local number collisions
+  are caught in the vet pass; the apply loop is still wrapped in a rollback
+  in case anything downstream refuses.
+- `POST /recruitment/candidates-transfer` (`CandidateBulkTransferIn`,
+  `Permission.RECRUITMENT_MANAGE`) just re-points `applied_cost_center_id`/
+  `applied_project_id` — a candidate has no employment to exit. It goes
+  through `recruitment_service.save_or_request_candidate_update`, so an
+  already-APPROVED candidate's move is **queued as a CandidateChangeRequest**
+  instead of overwriting approved data; one batch can therefore come back
+  part transferred and part queued (`{transferred, submitted_for_approval,
+  queued_references}`). Reference numbers never change.
+
+UI on both list pages (`Employees.jsx`, `Candidates.jsx`): a sticky tick
+column (un-tickable, with the reason as a tooltip, for rows that cannot
+move), a selection bar, a destination dialog previewing every picked row, and
+a result modal. Covered by `app/tests/test_employee_bulk_transfer.py` and
+`app/tests/test_candidate_bulk_transfer.py` — the second and third test files
+in the project.
+
 Still deliberately deferred: Cloudflare R2 document upload (local disk
 only for now, `boto3` sits unused in requirements.txt), employee
 self-service login, Previous Employment model/UI, separation approval
