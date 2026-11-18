@@ -209,9 +209,11 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
 
   const sortedRows = useMemo(() => (controlled ? rows : sortRows(rows, columns, sort)), [rows, sort, columns, controlled]);
 
-  if (!rows || rows.length === 0) {
-    return <div className="text-sm text-ink/40 py-10 text-center">{empty}</div>;
-  }
+  // An empty list keeps its header row rather than collapsing to a bare
+  // message: the columns are what tell you WHAT came back empty, and a
+  // header that disappears whenever a filter matches nothing reads as a
+  // column (the bulk-select tick box, say) having gone missing.
+  const isEmpty = !rows || rows.length === 0;
 
   function toggleSort(key) {
     if (!sort || sort.key !== key) setSort({ key, dir: "asc" });
@@ -300,7 +302,12 @@ export function Table({ columns, rows, keyField = "id", onRowClick, empty = "No 
           </tr>
         </thead>
         <tbody>
-          {sortedRows.map((row) => (
+          {isEmpty && (
+            <tr>
+              <td colSpan={columns.length} className="py-10 px-3 text-center text-sm text-ink/40">{empty}</td>
+            </tr>
+          )}
+          {(sortedRows || []).map((row) => (
             <tr
               key={row[keyField]}
               className={`border-b border-ink/5 last:border-0 ${onRowClick ? "cursor-pointer hover:bg-brand-50" : ""}`}

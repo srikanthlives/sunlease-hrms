@@ -449,6 +449,19 @@ only makes it harder to open).
   button narrows the selection to the records the backend will actually
   move and says so in its label (`Transfer 8 Active`); the document
   download takes the whole selection.
+- **Both pages gate the tick column the same way** — Employees on
+  `employee.separate || employee.documents.view`, Candidates on
+  `recruitment.manage || recruitment.view`. Candidates used to render it
+  ungated, so the two lists disagreed about whether a given role got one
+  (an APPROVER saw ticks on Candidates but not on Employees). A role
+  holding neither permission still sees no tick column, by design.
+- Related fix in `components/ui.jsx`: **`Table` used to drop its entire
+  header row when the list was empty** (an early `return` before the
+  `<table>`), which read as columns — the tick box especially —
+  disappearing whenever a filter matched nothing. It now always renders the
+  header and puts the empty message in a `colSpan` row. `sortedRows` is
+  null-guarded, since that early return was what previously stopped
+  `sortRows` returning `null` straight into `.map`.
 - `POST /exports/documents/preflight` returns **only the document types
   someone in the selection actually has**, each with uploaded/missing
   counts ("Aadhaar — 11 of 12"), plus the people who have nothing on file.

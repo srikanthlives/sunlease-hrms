@@ -290,9 +290,14 @@ export default function Employees() {
     setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
+  // Declared here, above every effect and column that reads them: the
+  // transfer preflight's dependency array is evaluated on each render, so a
+  // selection value declared further down would be read before it exists.
+  const pickedRows = rows.filter((r) => picked.includes(r.episode_id));
   // Only the Active records go to the transfer endpoint - the rest of the
   // selection is there for the document download.
-  const transferIds = () => pickedRows.filter(transferable).map((r) => r.episode_id);
+  const pickedTransferable = pickedRows.filter(transferable);
+  const transferIds = pickedTransferable.map((r) => r.episode_id);
 
   function openMove() {
     setMoveError("");
@@ -305,18 +310,18 @@ export default function Employees() {
   // who already holds one there, so the preflight re-runs whenever either
   // changes - the dialog can't ask for the right numbers before it knows.
   useEffect(() => {
-    if (!moveForm?.cost_center_id || !moveForm?.transfer_date || transferIds().length === 0) {
+    if (!moveForm?.cost_center_id || !moveForm?.transfer_date || transferIds.length === 0) {
       setPreflight(null);
       return;
     }
     let live = true;
     client.get("/employees-transfer-preflight", {
-      params: { cost_center_id: moveForm.cost_center_id, transfer_date: moveForm.transfer_date, episode_ids: transferIds().join(",") },
+      params: { cost_center_id: moveForm.cost_center_id, transfer_date: moveForm.transfer_date, episode_ids: transferIds.join(",") },
     })
       .then((res) => { if (live) { setPreflight(res.data); setMoveError(""); } })
       .catch((err) => { if (live) { setPreflight(null); setMoveError(apiErrorMessage(err)); } });
     return () => { live = false; };
-  }, [moveForm?.cost_center_id, moveForm?.transfer_date, transferIds().join(",")]);
+  }, [moveForm?.cost_center_id, moveForm?.transfer_date, transferIds.join(",")]);
 
   async function transferSelected() {
     setMoveError("");
@@ -329,7 +334,7 @@ export default function Employees() {
         department_id: Number(moveForm.department_id),
         transfer_date: moveForm.transfer_date,
         remarks: moveForm.remarks || null,
-        employees: transferIds().map((id) => ({ episode_id: id, employee_number: moveNumbers[id] || null })),
+        employees: transferIds.map((id) => ({ episode_id: id, employee_number: moveNumbers[id] || null })),
       });
       setMoveResult(res.data);
       setMoveForm(null);
@@ -345,8 +350,6 @@ export default function Employees() {
   // The header tick selects everything on THIS page, not the whole filtered
   // set - a page is what the operator can actually see and vouch for.
   const pageAllPicked = pageRows.length > 0 && pageRows.every((r) => picked.includes(r.episode_id));
-  const pickedRows = rows.filter((r) => picked.includes(r.episode_id));
-  const pickedTransferable = pickedRows.filter(transferable);
   const selectColumn = {
     key: "_pick",
     header: (

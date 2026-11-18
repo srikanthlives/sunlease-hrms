@@ -6,6 +6,7 @@ import { Card, Button, Input, Select, Checkbox, Table, StatusBadge, SectionDivid
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import ExportWizard from "../components/ExportWizard";
 import DocumentBundleModal from "../components/DocumentBundleModal";
+import { useAuth } from "../context/AuthContext";
 
 const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED", "WITHDRAWN"];
 
@@ -121,6 +122,7 @@ const EMPTY_FORM = {
 };
 
 export default function Candidates() {
+  const { can } = useAuth();
   const navigate = useNavigate();
   const [candidates, setCandidates] = useState([]);
   const [designations, setDesignations] = useState([]);
@@ -270,7 +272,15 @@ export default function Candidates() {
   // Every row is tickable, because documents can be downloaded for anyone -
   // only the Transfer button narrows the selection to the candidates the
   // backend will actually move, and says so.
+  //
+  // Gated the same way the Employees list gates its tick column, so the
+  // two pages don't disagree about whether a role gets one: a bulk
+  // Transfer needs recruitment.manage, and a bulk document download needs
+  // recruitment.view (which anyone reading this list already holds).
   const transferable = (c) => c.status !== "CONVERTED" && c.status !== "REJECTED";
+  const canTransfer = can("recruitment.manage");
+  const canBundleDocuments = can("recruitment.view");
+  const canSelect = canTransfer || canBundleDocuments;
   function togglePick(id) {
     setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
@@ -666,7 +676,7 @@ export default function Candidates() {
             )}
           </div>
         </div>
-        {picked.length > 0 && (
+        {canSelect && picked.length > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-brand-800/20 bg-brand-50 px-3 py-2">
             <span className="text-sm font-semibold text-ink">{picked.length} selected</span>
             {pickedTransferable.length < picked.length && (
@@ -682,21 +692,25 @@ export default function Candidates() {
             )}
             <span className="ml-auto flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => setPicked([])} className="gap-1"><X size={14} /> Clear</Button>
-              <Button variant="outline" size="sm" onClick={() => setDocsBundleOpen(true)} className="gap-1.5">
-                <FileText size={14} /> Download Documents
-              </Button>
+              {canBundleDocuments && (
+                <Button variant="outline" size="sm" onClick={() => setDocsBundleOpen(true)} className="gap-1.5">
+                  <FileText size={14} /> Download Documents
+                </Button>
+              )}
+              {canTransfer && (
               <Button size="sm" disabled={pickedTransferable.length === 0}
                 title={pickedTransferable.length === 0 ? "None of the selected candidates can be transferred" : undefined}
                 onClick={() => { setTransferError(""); setTransferForm({ applied_cost_center_id: "", applied_project_id: "", remarks: "" }); }}>
                 Transfer {pickedTransferable.length === picked.length ? "Selected" : `${pickedTransferable.length}`}
               </Button>
+              )}
             </span>
           </div>
         )}
         <Table
           sort={sort} onSortChange={setSort}
           singleLine
-          columns={[selectColumn, ...columns]} rows={pageRows} onRowClick={(r) => navigate(`/recruitment/candidates/${r.id}`)}
+          columns={canSelect ? [selectColumn, ...columns] : columns} rows={pageRows} onRowClick={(r) => navigate(`/recruitment/candidates/${r.id}`)}
           empty={candidates.length === 0 ? "No candidates yet." : "No candidates match the current filters."}
           stickyHeader
         />
