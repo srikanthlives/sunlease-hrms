@@ -5,6 +5,7 @@ import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import ExportWizard from "../components/ExportWizard";
+import DocumentBundleModal from "../components/DocumentBundleModal";
 
 const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED", "WITHDRAWN"];
 
@@ -175,6 +176,8 @@ export default function Candidates() {
   const [transferError, setTransferError] = useState("");
   const [bulkOpen, setBulkOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [docsBundleOpen, setDocsBundleOpen] = useState(false);
+  const [docsBundleResult, setDocsBundleResult] = useState(null);
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
@@ -263,6 +266,10 @@ export default function Candidates() {
   // A CONVERTED or REJECTED candidate cannot be transferred (the backend refuses
   // it), so those rows are shown but not tickable - the selection can never be
   // one the server will reject wholesale.
+  // One selection, two actions: bulk Transfer and bulk Document download.
+  // Every row is tickable, because documents can be downloaded for anyone -
+  // only the Transfer button narrows the selection to the candidates the
+  // backend will actually move, and says so.
   const transferable = (c) => c.status !== "CONVERTED" && c.status !== "REJECTED";
   function togglePick(id) {
     setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -273,7 +280,7 @@ export default function Candidates() {
     setTransferBusy(true);
     try {
       const res = await client.post("/recruitment/candidates-transfer", {
-        candidate_ids: picked,
+        candidate_ids: pickedTransferable.map((r) => r.id),
         applied_cost_center_id: Number(transferForm.applied_cost_center_id),
         applied_project_id: Number(transferForm.applied_project_id),
         remarks: transferForm.remarks || null,
@@ -395,29 +402,29 @@ export default function Candidates() {
   useEffect(() => setPage(1), [sort]);
   const { pageRows, page: safePage, pageCount, total } = usePagination(sortedCandidates, page, pageSize);
 
-  // The header tick selects everything transferable on THIS page, not the whole
-  // filtered set - a page is what the operator can actually see and vouch for.
-  const pickablePage = pageRows.filter(transferable);
-  const pageAllPicked = pickablePage.length > 0 && pickablePage.every((r) => picked.includes(r.id));
+  // The header tick selects everything on THIS page, not the whole filtered
+  // set - a page is what the operator can actually see and vouch for.
+  const pageAllPicked = pageRows.length > 0 && pageRows.every((r) => picked.includes(r.id));
   const pickedRows = candidates.filter((c) => picked.includes(c.id));
+  const pickedTransferable = pickedRows.filter(transferable);
   const selectColumn = {
     key: "_pick", header: (
       <input
         type="checkbox" className="rounded border-ink/30" checked={pageAllPicked}
-        title={pageAllPicked ? "Clear this page" : "Select every transferable candidate on this page"}
+        title={pageAllPicked ? "Clear this page" : "Select every candidate on this page"}
         onChange={() => setPicked((prev) => (pageAllPicked
-          ? prev.filter((id) => !pickablePage.some((r) => r.id === id))
-          : [...new Set([...prev, ...pickablePage.map((r) => r.id)])]))}
+          ? prev.filter((id) => !pageRows.some((r) => r.id === id))
+          : [...new Set([...prev, ...pageRows.map((r) => r.id)])]))}
       />
     ),
     sticky: true, stickyWidth: 40, noTruncate: true,
-    render: (r) => (transferable(r) ? (
+    render: (r) => (
       <input
         type="checkbox" className="rounded border-ink/30" checked={picked.includes(r.id)}
         onClick={(e) => e.stopPropagation()} onChange={() => togglePick(r.id)}
         title={`Select ${r.reference_number || r.first_name}`}
       />
-    ) : <span className="text-ink/20" title={`A ${r.status} candidate cannot be transferred`}>—</span>),
+    ),
   };
 
   const canCreate = form.first_name && form.last_name && form.applied_designation_id
@@ -662,15 +669,26 @@ export default function Candidates() {
         {picked.length > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-brand-800/20 bg-brand-50 px-3 py-2">
             <span className="text-sm font-semibold text-ink">{picked.length} selected</span>
-            {pickedRows.some((r) => r.status === "APPROVED") && (
+            {pickedTransferable.length < picked.length && (
               <span className="text-xs text-ink/50">
-                {pickedRows.filter((r) => r.status === "APPROVED").length} already Approved — those go in as Change Requests.
+                {pickedTransferable.length} of them can be transferred (a Converted or Rejected candidate cannot).
+                Documents can be downloaded for all {picked.length}.
+              </span>
+            )}
+            {pickedTransferable.some((r) => r.status === "APPROVED") && (
+              <span className="text-xs text-ink/50">
+                {pickedTransferable.filter((r) => r.status === "APPROVED").length} already Approved — those go in as Change Requests.
               </span>
             )}
             <span className="ml-auto flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => setPicked([])} className="gap-1"><X size={14} /> Clear</Button>
-              <Button size="sm" onClick={() => { setTransferError(""); setTransferForm({ applied_cost_center_id: "", applied_project_id: "", remarks: "" }); }}>
-                Transfer Selected
+              <Button variant="outline" size="sm" onClick={() => setDocsBundleOpen(true)} className="gap-1.5">
+                <FileText size={14} /> Download Documents
+              </Button>
+              <Button size="sm" disabled={pickedTransferable.length === 0}
+                title={pickedTransferable.length === 0 ? "None of the selected candidates can be transferred" : undefined}
+                onClick={() => { setTransferError(""); setTransferForm({ applied_cost_center_id: "", applied_project_id: "", remarks: "" }); }}>
+                Transfer {pickedTransferable.length === picked.length ? "Selected" : `${pickedTransferable.length}`}
               </Button>
             </span>
           </div>
@@ -688,6 +706,33 @@ export default function Candidates() {
         />
       </Card>
 
+      {docsBundleOpen && (
+        <DocumentBundleModal
+          entity="CANDIDATE" ids={picked}
+          onClose={() => setDocsBundleOpen(false)}
+          onDone={(summary) => setDocsBundleResult(summary)}
+        />
+      )}
+
+      {docsBundleResult && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDocsBundleResult(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-2">Download Started</h3>
+            <p className="text-sm text-ink/80">
+              <strong>{docsBundleResult.documents}</strong> document{docsBundleResult.documents === 1 ? "" : "s"} for{" "}
+              <strong>{docsBundleResult.people}</strong> candidate{docsBundleResult.people === 1 ? "" : "s"}.
+            </p>
+            {docsBundleResult.skipped > 0 && (
+              <p className="text-xs text-ink/50 mt-2">
+                {docsBundleResult.skipped} document{docsBundleResult.skipped === 1 ? " was" : "s were"} left out —
+                the reasons are listed in <code>_skipped.txt</code> inside the download.
+              </p>
+            )}
+            <div className="mt-4"><Button onClick={() => setDocsBundleResult(null)}>Close</Button></div>
+          </div>
+        </div>
+      )}
+
       {exportOpen && (
         <ExportWizard
           entity="CANDIDATE" initialFilters={exportFilters} filterFields={exportFilterFields}
@@ -698,7 +743,7 @@ export default function Candidates() {
       {transferForm && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => !transferBusy && setTransferForm(null)}>
           <div className="bg-white rounded-lg p-5 w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-ink mb-1">Transfer {picked.length} Candidate{picked.length === 1 ? "" : "s"}</h3>
+            <h3 className="text-sm font-semibold text-ink mb-1">Transfer {pickedTransferable.length} Candidate{pickedTransferable.length === 1 ? "" : "s"}</h3>
             <p className="text-xs text-ink/50 mb-4">
               All of them move to the one Cost Center and Project below. Reference numbers stay
               the same. The whole batch is applied together — if any one of them cannot move,
@@ -724,7 +769,7 @@ export default function Candidates() {
                     <th className="px-2 py-1.5">From</th><th className="px-2 py-1.5">Status</th></tr>
                 </thead>
                 <tbody>
-                  {pickedRows.map((r) => (
+                  {pickedTransferable.map((r) => (
                     <tr key={r.id} className="border-t border-ink/5">
                       <td className="px-2 py-1 font-mono">{r.reference_number || "—"}</td>
                       <td className="px-2 py-1">{r.first_name} {r.last_name}</td>

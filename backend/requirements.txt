@@ -37,3 +37,10 @@ pytesseract==0.3.10
 Pillow==10.4.0
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
+
+# Bulk document download (services/document_bundle_service.py) - merges a
+# person's selected documents into one PDF. Images are converted by Pillow
+# (above); pypdf is what concatenates them and splices in already-PDF
+# uploads. Without it the feature still runs, but every PDF upload is
+# reported as skipped instead of merged - see the module docstring.
+pypdf==5.1.0

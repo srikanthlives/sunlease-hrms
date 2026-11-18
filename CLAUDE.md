@@ -432,6 +432,61 @@ the rows → preview → download.
 - Covered by `app/tests/test_export_wizard.py` (28 tests, the bulk of them
   on the sensitive-column gate and the preview-equals-file promise).
 
+## Bulk document download (Employees + Candidates)
+
+`services/document_bundle_service.py` + two endpoints on
+`routers/exports.py`, driven by a shared
+`frontend/src/components/DocumentBundleModal.jsx`. Tick people on either
+list, hit **Download Documents**, multi-select which document types, and
+each person comes back as **one merged PDF** with those documents as pages
+in the chosen order. Several people arrive as a `.zip` of one PDF each; a
+single person with nothing skipped is served the bare PDF (zipping one file
+only makes it harder to open).
+
+- **One selection, two actions.** The tick column on both list pages now
+  serves bulk Transfer *and* bulk document download, so **every row is
+  tickable** (it used to be only the transferable ones). The Transfer
+  button narrows the selection to the records the backend will actually
+  move and says so in its label (`Transfer 8 Active`); the document
+  download takes the whole selection.
+- `POST /exports/documents/preflight` returns **only the document types
+  someone in the selection actually has**, each with uploaded/missing
+  counts ("Aadhaar — 11 of 12"), plus the people who have nothing on file.
+  Offering the whole Document Configuration master instead would be a list
+  of guaranteed skipped lines.
+- **Format handling**: images → PDF pages via Pillow (flattened onto white,
+  or a transparent PNG prints as a black rectangle); already-PDF uploads are
+  spliced in with **pypdf**; anything else (a `.txt`, a `.csv`) can't become
+  a page. Nothing unconvertible fails the download — it is listed in a
+  `_skipped.txt` **inside the archive**, so the gap travels with the file
+  instead of living only in a toast. Same for a row whose stored file has
+  gone missing.
+- **pypdf is in requirements.txt but the module imports it defensively**
+  (`PDF_MERGE_AVAILABLE`). Without it, image-only bundles still work
+  (Pillow writes multi-page PDFs itself) and every PDF upload is reported as
+  skipped, with the modal showing a banner saying why — the same
+  report-don't-fail rule applied to the dependency itself. **As of this
+  writing pypdf is NOT installed in `backend/.venv`** (install was blocked;
+  `pip install -r requirements.txt`, or a Docker rebuild, fixes it) — so the
+  PDF-merge test is `skipif`-ed and the no-pypdf degradation path is the one
+  currently covered.
+- Permissions mirror opening a single document on a profile:
+  `employee.documents.view`, or `recruitment.view` for a candidate. Cost
+  Center scope is enforced per person and a person out of scope **refuses
+  the whole batch** rather than being quietly omitted — a bulk download that
+  silently drops people gives no sign of who is missing from it. Every
+  download writes an `AuditLog` row (`DOCUMENT_BULK_DOWNLOAD`).
+- File names are `{reference} - {name}.pdf`, sanitised by `_safe()` (no
+  path separators — candidate reference numbers are slash-separated paths
+  and must not become folders in the zip) and capped at 80 characters, with
+  a `(2)` suffix if two capped names collide.
+- `MAX_PEOPLE = 200` per request — a guardrail, not a policy.
+- Covered by `app/tests/test_document_bundle.py` (25 tests), which writes
+  **real files through the real storage backend** — `conftest.py` now points
+  `HRMS_UPLOAD_DIR` at the same temp directory as the test database, so the
+  image→PDF conversion and zip packaging are genuinely exercised and the
+  shared `./data` attachments directory is never touched.
+
 ## Integration API (machine-to-machine)
 
 `routers/integrations.py` serves other Sunlease systems (the depot app is

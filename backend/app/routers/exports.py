@@ -9,15 +9,15 @@ of the file; it is the file's first page.
 import io
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_permission
 from app.db.session import get_db
 from app.models.enums import AuditAction, Permission
 from app.models.models import User
-from app.schemas.exports import ExportSpecIn, ExportTemplateIn
-from app.services import audit_service, export_service
+from app.schemas.exports import DocumentBundleIn, DocumentSelectionIn, ExportSpecIn, ExportTemplateIn
+from app.services import audit_service, document_bundle_service, export_service
 
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"], dependencies=[Depends(get_current_user)])
 
@@ -132,3 +132,62 @@ def delete_template(template_id: int, db: Session = Depends(get_db), user: User 
     db.delete(template)
     db.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Bulk document download
+# ---------------------------------------------------------------------------
+
+def _require_document_permission(entity: str, db: Session, user: User) -> None:
+    """Downloading someone's documents in bulk needs the same permission as
+    opening one of them on their profile - employee.documents.view, or
+    recruitment.view for a candidate (which is what the per-candidate
+    document download already requires)."""
+    from app.services import permission_service
+
+    code = (Permission.EMPLOYEE_DOCUMENTS_VIEW if entity == document_bundle_service.EMPLOYEE
+            else Permission.RECRUITMENT_VIEW)
+    if not permission_service.has_permission(db, user, code):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You are not allowed to view these documents")
+
+
+@router.post("/documents/preflight")
+def documents_preflight(payload: DocumentSelectionIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Every document type any of the selected people has on file, each with
+    an uploaded/missing count, so the dialog's document multi-select offers
+    real choices ("Aadhaar - 11 of 12") instead of the whole master list."""
+    entity = document_bundle_service.check_entity(payload.entity)
+    _require_document_permission(entity, db, user)
+    return document_bundle_service.preflight(db, user, entity, payload.ids)
+
+
+@router.post("/documents/download")
+def download_documents(payload: DocumentBundleIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """One merged PDF per selected person, zipped when there is more than
+    one. The counts and anything left out are echoed in response headers
+    (X-Bundle-*), since a file download body has nowhere else to say so."""
+    entity = document_bundle_service.check_entity(payload.entity)
+    _require_document_permission(entity, db, user)
+    bundle = document_bundle_service.build_bundle(db, user, entity, payload.ids, payload.document_type_ids)
+
+    # Documents leaving the system in bulk is worth a trail of its own.
+    audit_service.record(
+        db, "DOCUMENT_BULK_DOWNLOAD", user.id, AuditAction.UPDATE, user,
+        new_value=f"downloaded {bundle['documents_included']} document(s) for {bundle['people_included']} "
+                  f"{entity.lower()}(s) as {bundle['media_type']}; "
+                  f"document types: {', '.join(str(i) for i in payload.document_type_ids)}"
+                  + (f"; {len(bundle['skipped'])} left out" if bundle["skipped"] else ""),
+    )
+    db.commit()
+
+    return Response(
+        content=bundle["content"], media_type=bundle["media_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{bundle["filename"]}"',
+            "X-Bundle-People": str(bundle["people_included"]),
+            "X-Bundle-Documents": str(bundle["documents_included"]),
+            "X-Bundle-Skipped": str(len(bundle["skipped"])),
+            # So the browser can read the three headers above off the response.
+            "Access-Control-Expose-Headers": "X-Bundle-People, X-Bundle-Documents, X-Bundle-Skipped, Content-Disposition",
+        },
+    )

@@ -9,6 +9,9 @@ import tempfile
 # Must be set before the app is imported.
 _tmp = tempfile.mkdtemp()
 os.environ["HRMS_DATABASE_URL"] = f"sqlite:///{_tmp}/test.db"
+# Document tests write real files; keep them out of the shared ./data
+# attachments directory, which is live development data.
+os.environ["HRMS_UPLOAD_DIR"] = f"{_tmp}/attachments"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

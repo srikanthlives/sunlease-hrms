@@ -22,3 +22,14 @@ class ExportTemplateIn(BaseModel):
     sort_by: str | None = None
     sort_dir: str | None = "asc"
     is_shared: bool = False
+
+
+class DocumentSelectionIn(BaseModel):
+    """Which people the bulk document download is for."""
+    entity: str                                  # EMPLOYEE / CANDIDATE
+    ids: list[int] = Field(min_length=1)         # episode ids / candidate ids
+
+
+class DocumentBundleIn(DocumentSelectionIn):
+    """...and which document types, in the order they become pages."""
+    document_type_ids: list[int] = Field(min_length=1)

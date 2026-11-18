@@ -6,6 +6,7 @@ import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePaginat
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import { useAuth } from "../context/AuthContext";
 import ExportWizard from "../components/ExportWizard";
+import DocumentBundleModal from "../components/DocumentBundleModal";
 
 const ALL_COLUMNS = [
   {
@@ -121,6 +122,8 @@ export default function Employees() {
   const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [docsBundleOpen, setDocsBundleOpen] = useState(false);
+  const [docsBundleResult, setDocsBundleResult] = useState(null);
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
@@ -274,15 +277,22 @@ export default function Employees() {
     }
   }
 
-  // Only an ACTIVE record can start a transfer (the backend refuses anything
-  // else), so other rows are shown but not tickable - the selection can never
-  // be one the server will reject wholesale.
+  // One selection, two actions: bulk Transfer and bulk Document download.
+  // Every row is tickable, because documents can be downloaded for anyone -
+  // only the Transfer button narrows the selection to the ACTIVE records
+  // (the only ones the backend will transfer), and says so.
   const transferable = (r) => r.status === "ACTIVE";
   const canTransfer = can("employee.separate");
+  const canBundleDocuments = can("employee.documents.view");
+  const canSelect = canTransfer || canBundleDocuments;
 
   function togglePick(id) {
     setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
+
+  // Only the Active records go to the transfer endpoint - the rest of the
+  // selection is there for the document download.
+  const transferIds = () => pickedRows.filter(transferable).map((r) => r.episode_id);
 
   function openMove() {
     setMoveError("");
@@ -295,18 +305,18 @@ export default function Employees() {
   // who already holds one there, so the preflight re-runs whenever either
   // changes - the dialog can't ask for the right numbers before it knows.
   useEffect(() => {
-    if (!moveForm?.cost_center_id || !moveForm?.transfer_date || picked.length === 0) {
+    if (!moveForm?.cost_center_id || !moveForm?.transfer_date || transferIds().length === 0) {
       setPreflight(null);
       return;
     }
     let live = true;
     client.get("/employees-transfer-preflight", {
-      params: { cost_center_id: moveForm.cost_center_id, transfer_date: moveForm.transfer_date, episode_ids: picked.join(",") },
+      params: { cost_center_id: moveForm.cost_center_id, transfer_date: moveForm.transfer_date, episode_ids: transferIds().join(",") },
     })
       .then((res) => { if (live) { setPreflight(res.data); setMoveError(""); } })
       .catch((err) => { if (live) { setPreflight(null); setMoveError(apiErrorMessage(err)); } });
     return () => { live = false; };
-  }, [moveForm?.cost_center_id, moveForm?.transfer_date, picked.join(",")]);
+  }, [moveForm?.cost_center_id, moveForm?.transfer_date, transferIds().join(",")]);
 
   async function transferSelected() {
     setMoveError("");
@@ -319,7 +329,7 @@ export default function Employees() {
         department_id: Number(moveForm.department_id),
         transfer_date: moveForm.transfer_date,
         remarks: moveForm.remarks || null,
-        employees: picked.map((id) => ({ episode_id: id, employee_number: moveNumbers[id] || null })),
+        employees: transferIds().map((id) => ({ episode_id: id, employee_number: moveNumbers[id] || null })),
       });
       setMoveResult(res.data);
       setMoveForm(null);
@@ -332,31 +342,30 @@ export default function Employees() {
     }
   }
 
-  // The header tick selects everything transferable on THIS page, not the
-  // whole filtered set - a page is what the operator can actually see and
-  // vouch for.
-  const pickablePage = pageRows.filter(transferable);
-  const pageAllPicked = pickablePage.length > 0 && pickablePage.every((r) => picked.includes(r.episode_id));
+  // The header tick selects everything on THIS page, not the whole filtered
+  // set - a page is what the operator can actually see and vouch for.
+  const pageAllPicked = pageRows.length > 0 && pageRows.every((r) => picked.includes(r.episode_id));
   const pickedRows = rows.filter((r) => picked.includes(r.episode_id));
+  const pickedTransferable = pickedRows.filter(transferable);
   const selectColumn = {
     key: "_pick",
     header: (
       <input
         type="checkbox" className="rounded border-ink/30" checked={pageAllPicked}
-        title={pageAllPicked ? "Clear this page" : "Select every transferable employee on this page"}
+        title={pageAllPicked ? "Clear this page" : "Select every employee on this page"}
         onChange={() => setPicked((prev) => (pageAllPicked
-          ? prev.filter((id) => !pickablePage.some((r) => r.episode_id === id))
-          : [...new Set([...prev, ...pickablePage.map((r) => r.episode_id)])]))}
+          ? prev.filter((id) => !pageRows.some((r) => r.episode_id === id))
+          : [...new Set([...prev, ...pageRows.map((r) => r.episode_id)])]))}
       />
     ),
     sticky: true, stickyWidth: 40, noTruncate: true,
-    render: (r) => (transferable(r) ? (
+    render: (r) => (
       <input
         type="checkbox" className="rounded border-ink/30" checked={picked.includes(r.episode_id)}
         onClick={(e) => e.stopPropagation()} onChange={() => togglePick(r.episode_id)}
         title={`Select ${r.employee_number || r.first_name}`}
       />
-    ) : <span className="text-ink/20" title={`Only an Active employee can be transferred (this one is ${r.status})`}>—</span>),
+    ),
   };
 
   const preflightById = Object.fromEntries((preflight?.employees || []).map((e) => [e.episode_id, e]));
@@ -381,7 +390,7 @@ export default function Employees() {
   ];
 
   const columns = [
-    ...(canTransfer ? [selectColumn] : []),
+    ...(canSelect ? [selectColumn] : []),
     ...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)).map((c) => (
       c.key === "documents"
         ? {
@@ -495,15 +504,28 @@ export default function Employees() {
           {filteredRows.length} of {rows.length} employee{rows.length === 1 ? "" : "s"}
         </div>
 
-        {canTransfer && picked.length > 0 && (
+        {canSelect && picked.length > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-brand-800/20 bg-brand-50 px-3 py-2">
             <span className="text-sm font-semibold text-ink">{picked.length} selected</span>
-            <span className="text-xs text-ink/50">
-              Each one gets an exit on their current record and a new record in the destination Cost Center.
-            </span>
+            {canTransfer && pickedTransferable.length < picked.length && (
+              <span className="text-xs text-ink/50">
+                {pickedTransferable.length} of them {pickedTransferable.length === 1 ? "is" : "are"} Active — only
+                those can be transferred. Documents can be downloaded for all {picked.length}.
+              </span>
+            )}
             <span className="ml-auto flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => setPicked([])} className="gap-1"><X size={14} /> Clear</Button>
-              <Button size="sm" onClick={openMove}>Transfer Selected</Button>
+              {canBundleDocuments && (
+                <Button variant="outline" size="sm" onClick={() => setDocsBundleOpen(true)} className="gap-1.5">
+                  <FileText size={14} /> Download Documents
+                </Button>
+              )}
+              {canTransfer && (
+                <Button size="sm" onClick={openMove} disabled={pickedTransferable.length === 0}
+                  title={pickedTransferable.length === 0 ? "None of the selected employees are Active" : undefined}>
+                  Transfer {pickedTransferable.length === picked.length ? "Selected" : `${pickedTransferable.length} Active`}
+                </Button>
+              )}
             </span>
           </div>
         )}
@@ -537,11 +559,38 @@ export default function Employees() {
         />
       )}
 
+      {docsBundleOpen && (
+        <DocumentBundleModal
+          entity="EMPLOYEE" ids={picked}
+          onClose={() => setDocsBundleOpen(false)}
+          onDone={(summary) => setDocsBundleResult(summary)}
+        />
+      )}
+
+      {docsBundleResult && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setDocsBundleResult(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-2">Download Started</h3>
+            <p className="text-sm text-ink/80">
+              <strong>{docsBundleResult.documents}</strong> document{docsBundleResult.documents === 1 ? "" : "s"} for{" "}
+              <strong>{docsBundleResult.people}</strong> employee{docsBundleResult.people === 1 ? "" : "s"}.
+            </p>
+            {docsBundleResult.skipped > 0 && (
+              <p className="text-xs text-ink/50 mt-2">
+                {docsBundleResult.skipped} document{docsBundleResult.skipped === 1 ? " was" : "s were"} left out —
+                the reasons are listed in <code>_skipped.txt</code> inside the download.
+              </p>
+            )}
+            <div className="mt-4"><Button onClick={() => setDocsBundleResult(null)}>Close</Button></div>
+          </div>
+        </div>
+      )}
+
       {moveForm && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => !moveBusy && setMoveForm(null)}>
           <div className="bg-white rounded-lg p-5 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-ink mb-1">
-              Transfer {picked.length} Employee{picked.length === 1 ? "" : "s"}
+              Transfer {pickedTransferable.length} Employee{pickedTransferable.length === 1 ? "" : "s"}
             </h3>
             <p className="text-xs text-ink/50 mb-4">
               A Cost Center change is a transfer, not an edit: exit formalities start on each current
@@ -593,7 +642,7 @@ export default function Employees() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pickedRows.map((r) => {
+                  {pickedTransferable.map((r) => {
                     const pf = preflightById[r.episode_id];
                     return (
                       <tr key={r.episode_id} className="border-t border-ink/5">
@@ -623,7 +672,7 @@ export default function Employees() {
             </div>
             {preflight?.blocked > 0 && (
               <div className="mt-3 text-sm text-danger bg-danger/10 rounded-md px-3 py-2">
-                {preflight.blocked} of {picked.length} cannot be transferred (see the reasons above). Nothing can
+                {preflight.blocked} of {pickedTransferable.length} cannot be transferred (see the reasons above). Nothing can
                 be sent until they are removed from the selection.
               </div>
             )}
