@@ -4,6 +4,7 @@ import { X, Upload, Download, SlidersHorizontal, FileText, ClipboardList, Eye, C
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
+import ExportWizard from "../components/ExportWizard";
 
 const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED", "WITHDRAWN"];
 
@@ -173,6 +174,7 @@ export default function Candidates() {
   const [transferResult, setTransferResult] = useState(null);
   const [transferError, setTransferError] = useState("");
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
@@ -362,6 +364,23 @@ export default function Candidates() {
   });
 
   const filtersActive = search || statusFilter || interestFilter || costCenterFilter || projectFilter || categoryFilter;
+
+  // What the export wizard opens with: the filters currently narrowing this
+  // list, under the keys the backend's export FILTER_KEYS expects
+  // (candidates filter on ids, which is what the list row carries).
+  const exportFilters = {
+    search, status: statusFilter, interest_status: interestFilter,
+    cost_center_id: costCenterFilter, applied_project_id: projectFilter,
+    applied_employee_category_id: categoryFilter,
+  };
+  const exportFilterFields = [
+    { key: "search", label: "Search (name, reference no.)" },
+    { key: "status", label: "Status", options: STATUS_OPTIONS.map((v) => ({ value: v, label: v.replace(/_/g, " ") })) },
+    { key: "interest_status", label: "Interest", options: [{ value: "INTERESTED", label: "Interested" }, { value: "NOT_INTERESTED", label: "Not Interested" }] },
+    { key: "cost_center_id", label: "Cost Center", options: costCenters.map((c) => ({ value: String(c.id), label: c.name })) },
+    { key: "applied_project_id", label: "Project", options: projects.map((p) => ({ value: String(p.id), label: p.name })) },
+    { key: "applied_employee_category_id", label: "Employee Category", options: categories.map((c) => ({ value: String(c.id), label: c.name })) },
+  ];
   function clearFilters() {
     setSearch("");
     setStatusFilter("");
@@ -418,6 +437,9 @@ export default function Candidates() {
           <p className="text-sm text-ink/50 mt-1">Recruitment pipeline — tracked by reference number until converted to an employee.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setExportOpen(true)} className="gap-1.5">
+            <Download size={14} /> Export to Excel
+          </Button>
           <Button variant="outline" onClick={() => setBulkOpen(true)} className="gap-1.5">
             <Upload size={14} /> Bulk Upload
           </Button>
@@ -665,6 +687,13 @@ export default function Candidates() {
           onPageChange={setPage} onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
         />
       </Card>
+
+      {exportOpen && (
+        <ExportWizard
+          entity="CANDIDATE" initialFilters={exportFilters} filterFields={exportFilterFields}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
 
       {transferForm && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => !transferBusy && setTransferForm(null)}>

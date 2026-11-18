@@ -5,6 +5,7 @@ import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, sortRows, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import { useAuth } from "../context/AuthContext";
+import ExportWizard from "../components/ExportWizard";
 
 const ALL_COLUMNS = [
   {
@@ -119,6 +120,7 @@ export default function Employees() {
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
@@ -362,6 +364,22 @@ export default function Employees() {
   const moveReady = moveForm && moveForm.cost_center_id && moveForm.project_id && moveForm.department_id
     && moveForm.transfer_date && preflight && preflight.blocked === 0 && missingNumbers.length === 0;
 
+  // What the export wizard opens with: the filters currently narrowing this
+  // list, under the keys the backend's export FILTER_KEYS expects (employees
+  // filter on resolved names, which is what the list row carries).
+  const exportFilters = {
+    search, status: statusFilter, cost_center: costCenterFilter, department: departmentFilter,
+    employment_type: employmentTypeFilter, employee_category: categoryFilter,
+  };
+  const exportFilterFields = [
+    { key: "search", label: "Search (name, number, designation)" },
+    { key: "status", label: "Status", options: STATUS_OPTIONS.map((v) => ({ value: v, label: v.replace(/_/g, " ") })) },
+    { key: "cost_center", label: "Cost Center", options: costCenterOptions.map((v) => ({ value: v, label: v })) },
+    { key: "department", label: "Department", options: departmentOptions.map((v) => ({ value: v, label: v })) },
+    { key: "employment_type", label: "Employment Type", options: employmentTypeOptions.map((v) => ({ value: v, label: v })) },
+    { key: "employee_category", label: "Employee Category", options: categoryOptions.map((v) => ({ value: v, label: v })) },
+  ];
+
   const columns = [
     ...(canTransfer ? [selectColumn] : []),
     ...ALL_COLUMNS.filter((c) => visibleColumns.has(c.key)).map((c) => (
@@ -393,6 +411,9 @@ export default function Employees() {
           <p className="text-sm text-ink/50 mt-1">Employee Data Management — Module 1</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setExportOpen(true)} className="gap-1.5">
+            <Download size={14} /> Export to Excel
+          </Button>
           <Button variant="outline" onClick={() => setBulkOpen(true)} className="gap-1.5">
             <Upload size={14} /> Bulk Upload
           </Button>
@@ -508,6 +529,13 @@ export default function Employees() {
           </>
         )}
       </Card>
+
+      {exportOpen && (
+        <ExportWizard
+          entity="EMPLOYEE" initialFilters={exportFilters} filterFields={exportFilterFields}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
 
       {moveForm && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => !moveBusy && setMoveForm(null)}>

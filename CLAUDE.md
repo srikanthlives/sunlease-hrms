@@ -366,6 +366,72 @@ explicitly documented (in both the endpoint docstring and the UI) as
 best-effort, **not** government-portal-certified — same honesty
 `salary-app` itself gives for its non-ESIC-certified templates.
 
+## Excel export wizard (Employees + Candidates)
+
+`routers/exports.py` + `services/export_service.py` + a shared
+`frontend/src/components/ExportWizard.jsx`, reached from the **Export to
+Excel** button on both the Employees and Candidates list pages. Four steps:
+pick a saved pattern → choose and order the columns (and the sort) → filter
+the rows → preview → download.
+
+- **Rows are never queried here.** Both list endpoints' row building was
+  lifted into `services/employee_list_service.py::list_rows` and
+  `services/candidate_list_service.py::list_rows`, and the routers' `GET ""`
+  / `GET /candidates` handlers are now thin delegates to them. The export
+  consumes the same functions, so an export can't drift from what the list
+  page shows — the same reasoning as Module 4 aggregating already-computed
+  `PayslipLine` amounts instead of recomputing. `_candidate_summary_dict` in
+  `routers/recruitment.py` is now just an alias for
+  `candidate_list_service.summary_dict`.
+- **`POST /exports/preview` and `POST /exports/download` take the same
+  `ExportSpecIn` and share one builder** (`export_service.build_rows`), so
+  the preview genuinely is the file's first page (capped at
+  `PREVIEW_ROWS`, with the full count alongside) rather than a separate
+  approximation of it. There's a test asserting the file's first 25 rows
+  equal the preview's rows exactly.
+- **Sensitive employee columns** (Aadhaar/PAN/UAN/ESI number/bank account/
+  IFSC) are not on the list rows at all, so they're fetched separately
+  (`_sensitive_values`, two bulk queries) and **only exist in the offered
+  catalog for a caller holding `employee.sensitive.view`**. Asking for one
+  without it is a 400 "not available for export", not a blanked column —
+  an export must never become a way around
+  `permission_service.mask_sensitive_fields`. Cost Center scoping comes
+  free from reusing the list row builder. Exporting also requires the
+  entity's own view permission (`employee.view`/`recruitment.view`), and
+  every download writes an `AuditLog` row with the row count and column
+  list. Candidate Aadhaar/PAN/licence columns deliberately follow the
+  Candidates list's own policy (visible to anyone with `recruitment.view`,
+  and searchable there) rather than a stricter one invented for the export.
+- **`ExportTemplate`** is a saved *pattern*: ordered column keys (stored as
+  a comma-separated string — the order IS the file's column order), plus
+  `sort_by`/`sort_dir`. **Filters are deliberately not stored on it** — a
+  pattern is a layout, and which rows to export is a download-time
+  decision; baking last month's filter into a saved layout is how someone
+  quietly exports the wrong rows. Visible = your own + any `is_shared` one;
+  only HR_ADMIN/SUPER_ADMIN can set `is_shared`
+  (`export_service._may_share`). Patterns are genuinely deletable (a
+  convenience, not history — same reasoning as an `AdhocPayEntry`).
+  Loading a pattern that names a column you may not export drops just that
+  column and says so, rather than failing the load.
+- Filters are applied **server-side** on the list rows, mirroring each list
+  page's own filter semantics (`export_service.FILTER_KEYS`/`_matches`) —
+  employees filter on resolved **names** (what their list row carries),
+  candidates on **ids**. The wizard opens pre-filled with whatever filters
+  are currently narrowing the list, so "download what I'm looking at" needs
+  no re-typing, and an unknown filter key is ignored rather than fatal
+  (each page sends its whole filter state).
+- Sorting: blanks go last in **both** directions (`export_service._sort`) —
+  a missing value is "no value", not the smallest one — and the sort column
+  must be one of the exported columns, or the file comes back in an order
+  nothing in it explains. The workbook gets a bold frozen header row, a
+  header auto-filter over the data, `dd-mm-yyyy` on date columns and real
+  date/number cell types (not strings) so Excel can sort and filter them.
+- `permission_service.is_admin(db, user)` was added as the one named home
+  for the `(HR_ADMIN, SUPER_ADMIN)` tuple check, so new admin-bypass checks
+  can't accidentally compare against `HR_ADMIN` alone.
+- Covered by `app/tests/test_export_wizard.py` (28 tests, the bulk of them
+  on the sensitive-column gate and the preview-equals-file promise).
+
 ## Integration API (machine-to-machine)
 
 `routers/integrations.py` serves other Sunlease systems (the depot app is

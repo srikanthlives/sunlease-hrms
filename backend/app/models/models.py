@@ -1667,3 +1667,35 @@ class CandidateChangeRequest(Base):
     candidate = relationship("Candidate")
     requested_by = relationship("User", foreign_keys=[requested_by_id])
     reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
+
+
+class ExportTemplate(Base):
+    """A saved Excel export pattern: which columns, in which order, sorted
+    how. Entity is EMPLOYEE or CANDIDATE.
+
+    `columns` is a comma-separated list of column keys from
+    services/export_service.py's catalog, and the ORDER of that list is the
+    column order in the file - which is the whole point of saving one, so it
+    is stored as an ordered string rather than a set.
+
+    Filters are deliberately NOT stored here. A pattern is a layout, and the
+    subset to export ("this cost center, this month's joiners") is a
+    different decision made at download time - baking last month's filter
+    into a saved layout is how someone quietly exports the wrong rows.
+    """
+
+    __tablename__ = "export_templates"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)
+    entity = Column(String(20), nullable=False)       # EMPLOYEE / CANDIDATE
+    columns = Column(Text, nullable=False)            # ordered, comma-separated column keys
+    sort_by = Column(String(60))
+    sort_dir = Column(String(4), default="asc")
+    # Shared patterns are visible to everyone; only HR_ADMIN/SUPER_ADMIN can
+    # set the flag (export_service._may_share).
+    is_shared = Column(Boolean, default=False)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    created_by = relationship("User")

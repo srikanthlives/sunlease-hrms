@@ -24,6 +24,13 @@ def has_permission(db: Session, user: User, code: str) -> bool:
     return grant is not None
 
 
+def is_admin(db: Session, user: User) -> bool:
+    """The implicit-superuser roles - the same (HR_ADMIN, SUPER_ADMIN) tuple
+    every other bypass check in the codebase uses, named once so new checks
+    can't accidentally compare against HR_ADMIN alone."""
+    return user.role.name in (RoleName.HR_ADMIN, RoleName.SUPER_ADMIN)
+
+
 def role_permission_grants(db: Session, role_id: int) -> list[RolePermission]:
     return db.query(RolePermission).filter(RolePermission.role_id == role_id).all()
 

@@ -17,7 +17,7 @@ from app.schemas.recruitment import (
     CandidateBulkTransferIn, CandidateIn, CandidateInterestIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
-from app.services import audit_service, candidate_bulk_import_service, document_service, employee_service, licence_service, ocr_service, permission_service, recruitment_service
+from app.services import audit_service, candidate_bulk_import_service, candidate_list_service, document_service, employee_service, licence_service, ocr_service, permission_service, recruitment_service
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
@@ -165,24 +165,7 @@ def delete_designation_criteria(row_id: int, db: Session = Depends(get_db), user
 # Candidates
 # ---------------------------------------------------------------------------
 
-def _candidate_summary_dict(c: Candidate) -> dict:
-    return {
-        "id": c.id, "reference_number": c.reference_number,
-        "first_name": c.first_name, "last_name": c.last_name,
-        "applied_designation_id": c.applied_designation_id, "designation_name": c.designation.name if c.designation else None,
-        "applied_cost_center_id": c.applied_cost_center_id, "cost_center_name": c.cost_center.name if c.cost_center else None,
-        "applied_project_id": c.applied_project_id, "applied_project_name": c.project.name if c.project else None,
-        "applied_employee_category_id": c.applied_employee_category_id,
-        "applied_employee_category_name": c.employee_category.name if c.employee_category else None,
-        "applied_date": c.applied_date, "status": c.status,
-        "interest_status": c.interest_status, "not_interested_date": c.not_interested_date,
-        "mobile_number": c.mobile_number, "aadhaar": c.aadhaar, "pan": c.pan, "dl_licence_number": c.dl_licence_number,
-        # Extra list-view columns (hidden by default in the UI).
-        "gender": c.gender, "date_of_birth": c.date_of_birth, "alternate_mobile_number": c.alternate_mobile_number,
-        "personal_email": c.personal_email, "educational_qualification": c.educational_qualification,
-        "total_experience_years": c.total_experience_years, "current_designation": c.current_designation,
-        "current_company_name": c.current_company_name, "source": c.source, "remarks": c.remarks, "created_at": c.created_at,
-    }
+_candidate_summary_dict = candidate_list_service.summary_dict
 
 
 def _candidate_detail_dict(db: Session, c: Candidate, user: User | None = None) -> dict:
@@ -257,36 +240,10 @@ def _check_project_in_cost_center(db: Session, cost_center_id: int, project_id: 
 
 @router.get("/candidates", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
 def list_candidates(status_: str | None = None, designation_id: int | None = None, cost_center_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    query = db.query(Candidate)
-    allowed = permission_service.user_cost_center_ids(db, user)
-    if allowed is not None:
-        query = query.filter(Candidate.applied_cost_center_id.in_(allowed))
-    if status_:
-        query = query.filter(Candidate.status == status_)
-    if designation_id is not None:
-        query = query.filter(Candidate.applied_designation_id == designation_id)
-    if cost_center_id is not None:
-        query = query.filter(Candidate.applied_cost_center_id == cost_center_id)
-    rows = query.order_by(Candidate.created_at.desc()).all()
-    out = []
-    for c in rows:
-        criteria = recruitment_service.criteria_status(db, c)
-        mandatory_criteria = [r for r in criteria if r["is_mandatory"]]
-        required_docs = document_service.resolve_required_documents_for_candidate(db, c)
-        mandatory_docs = [d for d in required_docs if d["is_mandatory"]]
-        out.append({
-            **_candidate_summary_dict(c),
-            # Counts for the list view's Documents/Tests button badges - the
-            # full lists (which documents/tests, uploaded or not) are fetched
-            # on demand from GET /candidates/{id} when a popup is opened,
-            # rather than carried on every row here.
-            "documents_uploaded_count": len(c.documents),
-            "documents_all_mandatory_uploaded": bool(mandatory_docs) and all(d["uploaded"] for d in mandatory_docs),
-            "tests_recorded_count": sum(1 for r in criteria if r["result"] != "PENDING"),
-            "tests_total_count": len(criteria),
-            "tests_all_mandatory_passed": bool(mandatory_criteria) and all(r["result"] in ("PASS", "EXCEPTION") for r in mandatory_criteria),
-        })
-    return out
+    """The list rows themselves are built by
+    services/candidate_list_service.list_rows, so the Excel export can serve
+    exactly these rows instead of querying for them a second way."""
+    return candidate_list_service.list_rows(db, user, status_, designation_id, cost_center_id)
 
 
 @router.get("/candidates-bulk-upload-template", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

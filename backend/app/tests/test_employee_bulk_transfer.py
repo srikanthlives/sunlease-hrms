@@ -304,8 +304,10 @@ def test_the_destination_cost_center_must_be_in_scope(client, world):
     e = employee(world, "N-1")
     app.dependency_overrides[get_current_user] = lambda: staff
 
-    # No UserCostCenterScope rows at all means unrestricted, so scope the
-    # staff user to the source Cost Center only.
+    # Scope the staff user to the source Cost Center only - a non-admin
+    # with no UserCostCenterScope row has an empty allow-list (sees
+    # nothing), so the scope has to be given explicitly for the request to
+    # get far enough to be refused on the DESTINATION Cost Center.
     from app.models.models import UserCostCenterScope
     db.add(UserCostCenterScope(user_id=staff.id, cost_center_id=world["north"].id))
     db.commit()
