@@ -124,7 +124,7 @@ export default function CandidateDetail() {
         `Mark "${row.criteria_name}" as an EXCEPTION? This waives a mandatory criteria without the candidate actually passing it — the candidate can still be converted to an employee as if it had passed.`,
       );
       if (!proceed) return;
-    } else if ((result === "PASS" || result === "FAIL") && !row.attachment_file_name) {
+    } else if ((result === "PASS" || result === "FAIL") && !row.attachment_file_name && row.requires_attachment !== false) {
       const proceed = window.confirm(
         `No proof document is attached for "${row.criteria_name}". Do you really want to mark this ${result}?`,
       );
@@ -424,12 +424,32 @@ export default function CandidateDetail() {
 
   const criteriaColumns = [
     { key: "sequence", header: "#" },
-    { key: "criteria_name", header: "Criteria" },
+    {
+      key: "criteria_name", header: "Criteria",
+      render: (r) => (
+        <div>
+          <div>{r.criteria_name}</div>
+          {r.is_auto && <div className="text-xs text-ink/45 mt-0.5">Automatic · {r.auto_rule}</div>}
+        </div>
+      ),
+    },
     { key: "is_mandatory", header: "Mandatory", render: (r) => (r.is_mandatory ? "Yes" : "Optional") },
-    { key: "result", header: "Result", render: (r) => <StatusBadge status={r.result} /> },
+    {
+      key: "result", header: "Result",
+      // The reason is the whole value of an automatic verdict: "FAIL" alone
+      // leaves HR guessing which date is wrong.
+      render: (r) => (
+        <div>
+          <StatusBadge status={r.result} />
+          {r.is_auto && r.auto_reason && (
+            <div className="text-xs text-ink/50 mt-0.5 max-w-[20rem]">{r.auto_reason}</div>
+          )}
+        </div>
+      ),
+    },
     {
       key: "tested_on", header: "Tested On",
-      render: (r) => canRecordCriteria ? (
+      render: (r) => canRecordCriteria && !r.is_auto ? (
         <Input
           type="date"
           value={testedOnByCriteria[r.criteria_id] ?? (r.tested_on || new Date().toISOString().slice(0, 10))}
@@ -443,6 +463,8 @@ export default function CandidateDetail() {
       render: (r) => (
         <ProofCell
           fileName={r.attachment_file_name}
+          isShared={r.attachment_is_shared}
+          notRequired={r.requires_attachment === false}
           onUpload={(file) => uploadProof(r.criteria_id, file)}
           onDownload={() => downloadProof(r.criteria_id, r.attachment_file_name)}
           onPreview={() => setPreviewProof({ criteria_id: r.criteria_id, id: r.criteria_id, file_name: r.attachment_file_name, mime_type: r.attachment_mime_type })}
@@ -452,9 +474,12 @@ export default function CandidateDetail() {
     },
     {
       key: "_actions", header: "", align: "right",
+      // An automatic criteria is decided by its rule, so PASS/FAIL are not
+      // offered - only EXCEPTION, which is how any mandatory criteria has
+      // always been waived, visibly and with a remark.
       render: (r) => (
         <div className="flex gap-1 justify-end">
-          {RESULT_OPTIONS.map((opt) => (
+          {(r.is_auto ? ["EXCEPTION"] : RESULT_OPTIONS).map((opt) => (
             <Button key={opt} size="sm" variant={r.result === opt ? "accent" : "outline"} onClick={() => saveResult(r, opt)}>
               {opt}
             </Button>
@@ -1042,7 +1067,7 @@ function CandidateEditForm({ form, setForm, designations, categories, costCenter
   );
 }
 
-function ProofCell({ fileName, onUpload, onDownload, onPreview, onDelete }) {
+function ProofCell({ fileName, isShared, notRequired, onUpload, onDownload, onPreview, onDelete }) {
   const inputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
 
@@ -1067,6 +1092,14 @@ function ProofCell({ fileName, onUpload, onDownload, onPreview, onDelete }) {
           >
             <Paperclip size={12} /> <span className="max-w-[100px] truncate">{fileName}</span>
           </button>
+          {isShared && (
+            <span
+              className="text-[10px] uppercase tracking-wide text-ink/40 border border-ink/15 rounded px-1 py-px"
+              title="Uploaded once for several candidates. Removing it here affects only this candidate — the others keep it."
+            >
+              Shared
+            </span>
+          )}
           <button type="button" className="text-xs text-ink/40 hover:text-ink/70" onClick={onDownload} title="Download">
             <Download size={12} />
           </button>
@@ -1077,8 +1110,10 @@ function ProofCell({ fileName, onUpload, onDownload, onPreview, onDelete }) {
           )}
         </>
       ) : (
-        <span className="text-xs text-ink/30">—</span>
+        <span className="text-xs text-ink/30">{notRequired ? "Not required" : "—"}</span>
       )}
+      {/* Still offered when no proof is required - the flag stops the asking,
+          it never stops HR attaching something that does turn up. */}
       <label className="inline-flex items-center gap-1 text-xs text-ink/50 hover:text-ink/80 cursor-pointer">
         <Upload size={12} />
         <input ref={inputRef} type="file" className="hidden" onChange={handleFile} disabled={uploading} />

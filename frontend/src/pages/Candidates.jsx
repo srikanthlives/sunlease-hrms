@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { X, Upload, Download, SlidersHorizontal, FileText, ClipboardList, Eye, CheckCircle2 } from "lucide-react";
+import { X, Upload, Download, SlidersHorizontal, FileText, ClipboardList, Eye, CheckCircle2, ClipboardCheck } from "lucide-react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, Table, StatusBadge, SectionDivider, Pagination, usePagination, sortRows, formatAadhaar, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import ExportWizard from "../components/ExportWizard";
 import DocumentBundleModal from "../components/DocumentBundleModal";
+import BulkCriteriaUploadModal from "../components/BulkCriteriaUploadModal";
 import { useAuth } from "../context/AuthContext";
 import usePersistedState from "../hooks/usePersistedState";
 
@@ -183,6 +184,8 @@ export default function Candidates() {
   const [transferResult, setTransferResult] = useState(null);
   const [transferError, setTransferError] = useState("");
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [criteriaUploadOpen, setCriteriaUploadOpen] = useState(false);
+  const [criteriaUploadResult, setCriteriaUploadResult] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [docsBundleOpen, setDocsBundleOpen] = useState(false);
   const [docsBundleResult, setDocsBundleResult] = useState(null);
@@ -704,6 +707,11 @@ export default function Candidates() {
                 </Button>
               )}
               {canTransfer && (
+                <Button variant="outline" size="sm" onClick={() => setCriteriaUploadOpen(true)} className="gap-1.5">
+                  <ClipboardCheck size={14} /> Upload Test Document
+                </Button>
+              )}
+              {canTransfer && (
               <Button size="sm" disabled={pickedTransferable.length === 0}
                 title={pickedTransferable.length === 0 ? "None of the selected candidates can be transferred" : undefined}
                 onClick={() => { setTransferError(""); setTransferForm({ applied_cost_center_id: "", applied_project_id: "", remarks: "" }); }}>
@@ -725,6 +733,34 @@ export default function Candidates() {
           onPageChange={setPage} onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
         />
       </Card>
+
+      {criteriaUploadOpen && (
+        <BulkCriteriaUploadModal
+          ids={picked}
+          onClose={() => setCriteriaUploadOpen(false)}
+          onDone={(summary) => setCriteriaUploadResult(summary)}
+        />
+      )}
+
+      {criteriaUploadResult && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setCriteriaUploadResult(null)}>
+          <div className="bg-white rounded-lg p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-ink mb-2">Document Filed</h3>
+            <p className="text-sm text-ink/70">
+              <strong>{criteriaUploadResult.file_name}</strong> is now the proof for{" "}
+              <strong>{criteriaUploadResult.criteria_name}</strong> on{" "}
+              <strong>{criteriaUploadResult.attached_count}</strong> candidate
+              {criteriaUploadResult.attached_count === 1 ? "" : "s"} — one stored copy, shared by all of them.
+            </p>
+            <p className="mt-2 text-xs text-ink/50">
+              PASS/FAIL has not been changed. Record each candidate's result on their own page.
+            </p>
+            <div className="mt-4 flex justify-end">
+              <Button size="sm" onClick={() => setCriteriaUploadResult(null)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {docsBundleOpen && (
         <DocumentBundleModal

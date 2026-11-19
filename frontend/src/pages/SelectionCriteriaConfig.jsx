@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, Checkbox, StatusBadge } from "../components/ui";
+import CriteriaRuleBuilder from "../components/CriteriaRuleBuilder";
 
 export default function SelectionCriteriaConfig() {
   const [criteria, setCriteria] = useState([]);
@@ -8,9 +9,11 @@ export default function SelectionCriteriaConfig() {
   const [costCenters, setCostCenters] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [error, setError] = useState("");
-  const [newCriteria, setNewCriteria] = useState({ name: "", description: "" });
+  const [ruleOptions, setRuleOptions] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [newCriteria, setNewCriteria] = useState({ name: "", description: "", requires_attachment: true, supports_bulk_upload: false, auto_field: "", auto_measure: "", auto_operator: "", auto_value: "", auto_unit: "" });
   const [editingCriteriaId, setEditingCriteriaId] = useState(null);
-  const [editCriteriaForm, setEditCriteriaForm] = useState({ name: "", description: "", is_active: true });
+  const [editCriteriaForm, setEditCriteriaForm] = useState({ name: "", description: "", requires_attachment: true, supports_bulk_upload: false, auto_field: "", auto_measure: "", auto_operator: "", auto_value: "", auto_unit: "", is_active: true });
   const [editingAssignmentId, setEditingAssignmentId] = useState(null);
   const [editAssignmentForm, setEditAssignmentForm] = useState({ is_mandatory: true, sequence: "0", is_active: true });
 
@@ -36,6 +39,7 @@ export default function SelectionCriteriaConfig() {
 
   function reload() {
     client.get("/recruitment/criteria", { params: { include_inactive: true } }).then((res) => setCriteria(res.data));
+    client.get("/recruitment/criteria-rule-options").then((res) => setRuleOptions(res.data));
     client.get("/designations").then((res) => setDesignations(res.data));
     client.get("/cost-centers").then((res) => setCostCenters(res.data));
     reloadAssignments();
@@ -50,7 +54,7 @@ export default function SelectionCriteriaConfig() {
     setError("");
     try {
       await client.post("/recruitment/criteria", newCriteria);
-      setNewCriteria({ name: "", description: "" });
+      setNewCriteria({ name: "", description: "", requires_attachment: true, supports_bulk_upload: false, auto_field: "", auto_measure: "", auto_operator: "", auto_value: "", auto_unit: "" });
       reload();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -59,7 +63,14 @@ export default function SelectionCriteriaConfig() {
 
   function startEditCriteria(row) {
     setEditingCriteriaId(row.id);
-    setEditCriteriaForm({ name: row.name, description: row.description || "", is_active: row.is_active });
+    setEditCriteriaForm({
+      name: row.name, description: row.description || "",
+      requires_attachment: row.requires_attachment !== false,
+      supports_bulk_upload: !!row.supports_bulk_upload,
+      auto_field: row.auto_field || "", auto_measure: row.auto_measure || "",
+      auto_operator: row.auto_operator || "", auto_value: row.auto_value ?? "",
+      auto_unit: row.auto_unit || "", is_active: row.is_active,
+    });
   }
 
   function cancelEditCriteria() {
@@ -69,8 +80,9 @@ export default function SelectionCriteriaConfig() {
   async function saveEditCriteria() {
     setError("");
     try {
-      await client.put(`/recruitment/criteria/${editingCriteriaId}`, editCriteriaForm);
+      const res = await client.put(`/recruitment/criteria/${editingCriteriaId}`, editCriteriaForm);
       setEditingCriteriaId(null);
+      if (res.data?.reevaluated_candidates) setNotice(`Rule saved — ${res.data.reevaluated_candidates} candidate(s) re-evaluated.`);
       reload();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -178,6 +190,33 @@ export default function SelectionCriteriaConfig() {
         : (r.description || "—"),
     },
     {
+      key: "auto_rule", header: "Decided by",
+      render: (r) => r.is_auto
+        ? <span className="text-xs text-ink" title={r.auto_rule}>Rule</span>
+        : <span className="text-xs text-ink/40">HR</span>,
+    },
+    {
+      key: "requires_attachment", header: "Proof",
+      render: (r) => editingCriteriaId === r.id
+        ? <Checkbox
+            checked={editCriteriaForm.requires_attachment}
+            onChange={(e) => setEditCriteriaForm({
+              ...editCriteriaForm,
+              requires_attachment: e.target.checked,
+              supports_bulk_upload: e.target.checked ? editCriteriaForm.supports_bulk_upload : false,
+            })}
+          />
+        : (r.requires_attachment !== false
+            ? <span className="text-xs text-ink">Required</span>
+            : <span className="text-xs text-ink/40">Not needed</span>),
+    },
+    {
+      key: "supports_bulk_upload", header: "Bulk Upload",
+      render: (r) => editingCriteriaId === r.id
+        ? <Checkbox disabled={!editCriteriaForm.requires_attachment} checked={editCriteriaForm.supports_bulk_upload} onChange={(e) => setEditCriteriaForm({ ...editCriteriaForm, supports_bulk_upload: e.target.checked })} />
+        : (r.supports_bulk_upload ? <span className="text-xs text-ink">Shared proof</span> : <span className="text-xs text-ink/40">—</span>),
+    },
+    {
       key: "is_active", header: "Active",
       render: (r) => editingCriteriaId === r.id
         ? <Checkbox checked={editCriteriaForm.is_active} onChange={(e) => setEditCriteriaForm({ ...editCriteriaForm, is_active: e.target.checked })} />
@@ -257,6 +296,7 @@ export default function SelectionCriteriaConfig() {
         </p>
       </div>
       {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}
+      {notice && <div className="text-sm text-ink/70 bg-brand-50 rounded-md px-3 py-2">{notice}</div>}
 
       <Card>
         <h2 className="text-sm font-semibold text-ink mb-3">New Selection Criteria</h2>
@@ -265,11 +305,53 @@ export default function SelectionCriteriaConfig() {
           <Input placeholder="Description (optional)" value={newCriteria.description} onChange={(e) => setNewCriteria({ ...newCriteria, description: e.target.value })} />
           <Button onClick={createCriteria} disabled={!newCriteria.name}>Add Criteria</Button>
         </div>
+        <label className="flex items-start gap-2 mt-3 cursor-pointer">
+          <Checkbox
+            checked={newCriteria.requires_attachment}
+            onChange={(e) => setNewCriteria({
+              ...newCriteria,
+              requires_attachment: e.target.checked,
+              // A criteria with no proof document can't share one either.
+              supports_bulk_upload: e.target.checked ? newCriteria.supports_bulk_upload : false,
+            })}
+          />
+          <span className="text-sm text-ink">
+            Needs a proof document
+            <span className="block text-xs text-ink/50">
+              Untick for a stage that produces no document — an interview, a reference call. HR can still attach one if
+              there happens to be something; it just stops being asked for.
+            </span>
+          </span>
+        </label>
+        <label className={`flex items-start gap-2 mt-2 ${newCriteria.requires_attachment ? "cursor-pointer" : "opacity-40"}`}>
+          <Checkbox
+            disabled={!newCriteria.requires_attachment}
+            checked={newCriteria.supports_bulk_upload}
+            onChange={(e) => setNewCriteria({ ...newCriteria, supports_bulk_upload: e.target.checked })}
+          />
+          <span className="text-sm text-ink">
+            Supports bulk upload
+            <span className="block text-xs text-ink/50">
+              One proof document can cover several candidates — e.g. a training whose single report sheet lists every
+              attendee. The file is stored once and shared; each candidate's PASS/FAIL is still recorded individually.
+            </span>
+          </span>
+        </label>
+        <CriteriaRuleBuilder
+          options={ruleOptions} value={newCriteria}
+          onChange={(next) => setNewCriteria({ ...next, requires_attachment: next.auto_field ? false : next.requires_attachment })}
+        />
       </Card>
 
       <Card>
         <h2 className="text-sm font-semibold text-ink mb-3">All Selection Criteria</h2>
         <Table columns={criteriaColumns} rows={criteria} empty="No selection criteria yet." />
+        {editingCriteriaId && (
+          <CriteriaRuleBuilder
+            options={ruleOptions} value={editCriteriaForm}
+            onChange={(next) => setEditCriteriaForm({ ...next, requires_attachment: next.auto_field ? false : next.requires_attachment })}
+          />
+        )}
       </Card>
 
       <Card>

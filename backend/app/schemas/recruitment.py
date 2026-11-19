@@ -12,6 +12,20 @@ class ChangeRequestReviewIn(BaseModel):
 class SelectionCriteriaIn(BaseModel):
     name: str
     description: str | None = None
+    # Whether one proof document can be filed against many candidates at
+    # once (a training/assessment report sheet listing every attendee).
+    supports_bulk_upload: bool = False
+    # False for a stage that produces no document at all (an interview, a
+    # reference call) - stops the UI asking for a proof that will never exist.
+    requires_attachment: bool = True
+    # An automatic criteria: a rule over one of the candidate's date fields
+    # (criteria_rule_service). auto_field set = automatic; all five are
+    # validated and cleared together.
+    auto_field: str | None = None
+    auto_measure: str | None = None
+    auto_operator: str | None = None
+    auto_value: float | None = None
+    auto_unit: str | None = None
     is_active: bool = True
 
 

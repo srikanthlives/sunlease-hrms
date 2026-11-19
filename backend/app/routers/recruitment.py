@@ -17,7 +17,7 @@ from app.schemas.recruitment import (
     CandidateBulkTransferIn, CandidateIn, CandidateInterestIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
     ConvertCandidateIn, DesignationCriteriaIn, DesignationCriteriaUpdateIn, SelectionCriteriaIn,
 )
-from app.services import audit_service, candidate_bulk_import_service, candidate_list_service, document_service, employee_service, licence_service, ocr_service, permission_service, recruitment_service
+from app.services import audit_service, candidate_bulk_import_service, candidate_list_service, criteria_rule_service, document_service, employee_service, licence_service, ocr_service, permission_service, recruitment_service
 from app.services.storage import get_storage
 
 router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependencies=[Depends(get_current_user)])
@@ -31,8 +31,45 @@ router = APIRouter(prefix="/api/v1/recruitment", tags=["recruitment"], dependenc
 # SUPER_ADMIN can create/edit/delete.
 # ---------------------------------------------------------------------------
 
+@router.get("/criteria-rule-options")
+def criteria_rule_options():
+    """What an automatic rule may be built from - the dropdowns on the
+    Selection Criteria form. Serving the catalog rather than hardcoding it in
+    the UI keeps the two from drifting, and a field missing here simply
+    cannot be referenced by a rule."""
+    return {
+        "fields": [{"value": k, "label": v} for k, v in criteria_rule_service.FIELDS.items()],
+        "measures": [{"value": k, "label": v} for k, v in criteria_rule_service.MEASURES.items()],
+        "operators": [{"value": k, "label": v} for k, v in criteria_rule_service.OPERATORS.items()],
+        "units": [{"value": u, "label": u.capitalize()} for u in criteria_rule_service.UNITS],
+    }
+
+
+def _coerce_criteria_flags(data: dict) -> dict:
+    """A criteria that needs no proof document cannot also share one across
+    candidates - the bulk upload exists only to file a proof. Rather than
+    reject the combination (two checkboxes whose order of clicking would
+    decide whether you got an error), the impossible half is cleared."""
+    if not data.get("requires_attachment", True):
+        data["supports_bulk_upload"] = False
+    try:
+        data = criteria_rule_service.validate(data)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return data
+
+
 def _criteria_dict(c: SelectionCriteria) -> dict:
-    return {"id": c.id, "name": c.name, "description": c.description, "is_active": c.is_active}
+    return {
+        "id": c.id, "name": c.name, "description": c.description,
+        "supports_bulk_upload": bool(c.supports_bulk_upload),
+        "requires_attachment": c.requires_attachment is not False,
+        "is_auto": criteria_rule_service.is_auto(c),
+        "auto_rule": criteria_rule_service.describe(c),
+        "auto_field": c.auto_field, "auto_measure": c.auto_measure,
+        "auto_operator": c.auto_operator, "auto_value": c.auto_value, "auto_unit": c.auto_unit,
+        "is_active": c.is_active,
+    }
 
 
 @router.get("/criteria")
@@ -47,7 +84,7 @@ def list_criteria(include_inactive: bool = False, db: Session = Depends(get_db))
 def create_criteria(payload: SelectionCriteriaIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if db.query(SelectionCriteria).filter(SelectionCriteria.name == payload.name).first():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A selection criteria with this name already exists")
-    c = SelectionCriteria(**payload.model_dump())
+    c = SelectionCriteria(**_coerce_criteria_flags(payload.model_dump()))
     db.add(c)
     db.flush()
     audit_service.record(db, "SELECTION_CRITERIA", c.id, AuditAction.CREATE, user)
@@ -60,11 +97,13 @@ def update_criteria(criteria_id: int, payload: SelectionCriteriaIn, db: Session 
     c = db.query(SelectionCriteria).filter(SelectionCriteria.id == criteria_id).first()
     if not c:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Selection criteria not found")
-    for field, value in payload.model_dump().items():
+    for field, value in _coerce_criteria_flags(payload.model_dump()).items():
         setattr(c, field, value)
     audit_service.record(db, "SELECTION_CRITERIA", c.id, AuditAction.UPDATE, user)
+    # The rule is itself part of "the data behind the evaluation".
+    affected = recruitment_service.reevaluate_candidates_for_criteria(db, c, user)
     db.commit()
-    return _criteria_dict(c)
+    return {**_criteria_dict(c), "reevaluated_candidates": affected}
 
 
 def _designation_criteria_dict(r: DesignationCriteria) -> dict:
@@ -286,6 +325,7 @@ def create_candidate(payload: CandidateIn, db: Session = Depends(get_db), user: 
     candidate.reference_number = recruitment_service.generate_reference_number(db, candidate)
     db.add(candidate)
     audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.CREATE, user, new_value=candidate.reference_number)
+    recruitment_service.reevaluate_auto_criteria(db, candidate, user)
     db.commit()
     db.refresh(candidate)
     return _candidate_detail_dict(db, candidate)
@@ -540,6 +580,17 @@ def delete_candidate(candidate_id: int, db: Session = Depends(get_db), user: Use
 @router.post("/candidates/{candidate_id}/stage-results", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
 def record_stage_result(candidate_id: int, payload: CandidateStageResultIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     candidate = _get_candidate(db, candidate_id)
+    criteria = db.query(SelectionCriteria).filter(SelectionCriteria.id == payload.criteria_id).first()
+    if criteria and criteria_rule_service.is_auto(criteria) and payload.result != "EXCEPTION":
+        # EXCEPTION stays available - an automatic rule must still be
+        # waivable, visibly and with a remark. A manual PASS is refused
+        # because it would leave an overridden rule looking exactly like one
+        # that genuinely passed.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"\"{criteria.name}\" is decided automatically ({criteria_rule_service.describe(criteria)}). "
+            "Correct the candidate's details, or record an EXCEPTION to waive it.",
+        )
     recruitment_service.record_stage_result(db, candidate, payload.criteria_id, payload.result, payload.tested_on, payload.remarks, user)
     db.commit()
     return _candidate_detail_dict(db, candidate)
@@ -562,13 +613,92 @@ def upload_stage_result_attachment(
     return {"ok": True, "attachment_file_name": stage_result.attachment_file_name}
 
 
+def _collect_bulk_candidates(db: Session, user: User, candidate_ids: list[int]) -> list[Candidate]:
+    """Resolves ids to candidates, refusing the whole batch on an unknown id
+    or one outside the caller's Cost Center scope - a bulk action that
+    silently drops people gives no sign of who is missing from it (same rule
+    as the bulk document download)."""
+    missing, out = [], []
+    for candidate_id in dict.fromkeys(candidate_ids):          # tolerate a repeated id
+        candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
+        if not candidate:
+            missing.append(f"candidate {candidate_id}: not found")
+            continue
+        try:
+            _check_applied_scope(db, user, candidate.applied_cost_center_id, candidate.applied_project_id)
+        except HTTPException as exc:
+            missing.append(f"{candidate.reference_number or candidate_id}: {exc.detail}")
+            continue
+        out.append(candidate)
+    if missing:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(missing[:10]))
+    return out
+
+
+def _get_bulk_criteria(db: Session, criteria_id: int) -> SelectionCriteria:
+    criteria = db.query(SelectionCriteria).filter(SelectionCriteria.id == criteria_id).first()
+    if not criteria:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Selection criteria not found")
+    return criteria
+
+
+@router.get("/bulk-criteria", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def list_bulk_upload_criteria(db: Session = Depends(get_db)):
+    """The active criteria whose proof document may be shared across
+    candidates - what the bulk upload dialog offers."""
+    rows = (
+        db.query(SelectionCriteria)
+        .filter(SelectionCriteria.is_active.is_(True), SelectionCriteria.supports_bulk_upload.is_(True))
+        .order_by(SelectionCriteria.name)
+        .all()
+    )
+    return [_criteria_dict(c) for c in rows]
+
+
+@router.get("/bulk-criteria-preflight", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def bulk_criteria_preflight(
+    criteria_id: int, candidate_ids: str = Query(...),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    """Per selected candidate: can this test's report be filed against them,
+    and do they already have a result/proof recorded for it. Lets the dialog
+    grey out the ineligible rows with the reason and show "already recorded"
+    on the rest, so nothing is ever silently overwritten."""
+    criteria = _get_bulk_criteria(db, criteria_id)
+    ids = [int(part) for part in candidate_ids.split(",") if part.strip()]
+    candidates = _collect_bulk_candidates(db, user, ids)
+    return {
+        "criteria": _criteria_dict(criteria),
+        "candidates": [recruitment_service.vet_candidate_for_bulk_attachment(db, c, criteria) for c in candidates],
+    }
+
+
+@router.post("/candidates-bulk-stage-attachment", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])
+def bulk_upload_stage_attachment(
+    criteria_id: int = Form(...), candidate_ids: str = Form(...), file: UploadFile = File(...),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    """Files ONE proof document against many candidates for one selection
+    criteria - stored once, referenced by each candidate's stage result.
+
+    Results are deliberately NOT set here: a training report normally lists
+    both passes and failures, so PASS/FAIL stays a per-candidate decision
+    recorded the usual way."""
+    criteria = _get_bulk_criteria(db, criteria_id)
+    ids = [int(part) for part in candidate_ids.split(",") if part.strip()]
+    candidates = _collect_bulk_candidates(db, user, ids)
+    result = recruitment_service.bulk_attach_shared_proof(db, criteria, candidates, file, user)
+    db.commit()
+    return result
+
+
 def _get_stage_result_with_attachment(db: Session, candidate: Candidate, criteria_id: int) -> CandidateStageResult:
     stage_result = (
         db.query(CandidateStageResult)
         .filter(CandidateStageResult.candidate_id == candidate.id, CandidateStageResult.criteria_id == criteria_id)
         .first()
     )
-    if not stage_result or not stage_result.attachment_object_key:
+    if not stage_result or not recruitment_service.effective_attachment(stage_result):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No proof document uploaded for this criteria")
     return stage_result
 
@@ -577,14 +707,16 @@ def _get_stage_result_with_attachment(db: Session, candidate: Candidate, criteri
 def download_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db)):
     candidate = _get_candidate(db, candidate_id)
     stage_result = _get_stage_result_with_attachment(db, candidate, criteria_id)
-    return document_service.serve_object(stage_result.attachment_object_key, media_type=stage_result.attachment_mime_type, download_name=stage_result.attachment_file_name)
+    object_key, mime_type, file_name = recruitment_service.effective_attachment(stage_result)
+    return document_service.serve_object(object_key, media_type=mime_type, download_name=file_name)
 
 
 @router.get("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment/preview", dependencies=[Depends(require_permission(Permission.RECRUITMENT_VIEW))])
 def preview_stage_result_attachment(candidate_id: int, criteria_id: int, db: Session = Depends(get_db)):
     candidate = _get_candidate(db, candidate_id)
     stage_result = _get_stage_result_with_attachment(db, candidate, criteria_id)
-    return document_service.serve_object(stage_result.attachment_object_key, media_type=stage_result.attachment_mime_type)
+    object_key, mime_type, _ = recruitment_service.effective_attachment(stage_result)
+    return document_service.serve_object(object_key, media_type=mime_type)
 
 
 @router.delete("/candidates/{candidate_id}/stage-results/{criteria_id}/attachment", dependencies=[Depends(require_permission(Permission.RECRUITMENT_MANAGE))])

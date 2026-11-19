@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import os
 import re
+import uuid
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
@@ -9,9 +10,10 @@ from sqlalchemy.orm import Session
 from app.models.enums import AuditAction, CandidateStatus, RoleName, TransactionType
 from app.models.models import (
     Address, Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
-    DesignationCriteria, DrivingLicenceDetail, Employee, EmploymentEpisode, SelectionCriteria, User,
+    DesignationCriteria, DrivingLicenceDetail, Employee, EmploymentEpisode, SelectionCriteria,
+    SharedCriteriaAttachment, User,
 )
-from app.services import approval_service, audit_service, document_service, employee_service
+from app.services import approval_service, audit_service, criteria_rule_service, document_service, employee_service
 from app.services.storage import get_storage
 
 
@@ -103,10 +105,46 @@ def criteria_status(db: Session, candidate: Candidate) -> list[dict]:
             "tested_on": result.tested_on if result else None,
             "remarks": result.remarks if result else None,
             "stage_result_id": result.id if result else None,
-            "attachment_file_name": result.attachment_file_name if result else None,
-            "attachment_mime_type": result.attachment_mime_type if result else None,
+            "attachment_file_name": _effective_attachment_name(result),
+            "attachment_mime_type": _effective_attachment_mime(result),
+            "attachment_is_shared": bool(result and not result.attachment_object_key and result.shared_attachment_id),
+            "is_auto": criteria_rule_service.is_auto(req.criteria) if req.criteria else False,
+            "auto_rule": criteria_rule_service.describe(req.criteria) if req.criteria else None,
+            "auto_reason": result.auto_reason if result else None,
+            "supports_bulk_upload": bool(req.criteria and req.criteria.supports_bulk_upload),
+            "requires_attachment": not req.criteria or req.criteria.requires_attachment is not False,
         })
     return out
+
+
+def _effective_attachment_name(result: CandidateStageResult | None) -> str | None:
+    """A stage result's proof is its own uploaded file if it has one, else
+    the shared document it points at. Own file wins so that a per-candidate
+    re-upload can always supersede a bulk-filed report for that one person
+    without disturbing the others."""
+    if not result:
+        return None
+    if result.attachment_object_key:
+        return result.attachment_file_name
+    return result.shared_attachment.file_name if result.shared_attachment else None
+
+
+def _effective_attachment_mime(result: CandidateStageResult | None) -> str | None:
+    if not result:
+        return None
+    if result.attachment_object_key:
+        return result.attachment_mime_type
+    return result.shared_attachment.mime_type if result.shared_attachment else None
+
+
+def effective_attachment(result: CandidateStageResult) -> tuple[str, str | None, str | None] | None:
+    """(object_key, mime_type, file_name) of whichever proof applies, or None."""
+    if result.attachment_object_key:
+        return result.attachment_object_key, result.attachment_mime_type, result.attachment_file_name
+    if result.shared_attachment:
+        shared = result.shared_attachment
+        return shared.object_key, shared.mime_type, shared.file_name
+    return None
 
 
 def check_aadhaar_duplicates(db: Session, aadhaar: str | None, exclude_candidate_id: int | None = None) -> list[str]:
@@ -341,7 +379,10 @@ def save_or_request_candidate_update(db: Session, candidate: Candidate, changes:
     for field, value in changes.items():
         setattr(candidate, field, value)
     db.add(candidate)
+    db.flush()
     audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user)
+    # The edit may well be the date an automatic rule reads.
+    reevaluate_auto_criteria(db, candidate, user)
     return {"submitted_for_approval": False}
 
 
@@ -375,6 +416,11 @@ def review_candidate_change_request(db: Session, request: CandidateChangeRequest
             for field, value in changes.items():
                 setattr(candidate, field, value)
             db.add(candidate)
+            db.flush()
+            # An APPROVED candidate's edits land here rather than in
+            # save_or_request_candidate_update, so this is the other half of
+            # "re-evaluate when the data behind the rule changes".
+            reevaluate_auto_criteria(db, candidate, user)
         elif request.request_type == "DOCUMENT_DELETE":
             doc = db.query(CandidateDocument).filter(CandidateDocument.id == changes["document_id"]).first()
             if doc:
@@ -440,6 +486,10 @@ def save_stage_result_attachment(db: Session, stage_result: CandidateStageResult
     content = upload_file.file.read()
     get_storage().save(object_key, content)
 
+    # An individual upload supersedes any shared document this row pointed
+    # at - detach first so the shared file's reference count stays honest.
+    if stage_result.shared_attachment_id:
+        detach_shared_attachment(db, stage_result, actor, audit=False)
     stage_result.attachment_object_key = object_key
     stage_result.attachment_file_name = upload_file.filename
     stage_result.attachment_mime_type = upload_file.content_type
@@ -454,6 +504,9 @@ def delete_stage_result_attachment(db: Session, stage_result: CandidateStageResu
     as document_service.delete_candidate_document. The result itself
     (PASS/FAIL/EXCEPTION, tested_on, remarks) is untouched - only the
     attachment goes."""
+    if stage_result.shared_attachment_id and not stage_result.attachment_object_key:
+        detach_shared_attachment(db, stage_result, actor)
+        return
     if stage_result.attachment_object_key:
         get_storage().delete(stage_result.attachment_object_key)
     stage_result.attachment_object_key = None
@@ -481,6 +534,12 @@ def record_stage_result(db: Session, candidate: Candidate, criteria_id: int, res
     row.tested_on = tested_on
     row.remarks = remarks
     row.reviewed_by_id = user.id
+    # A person decided this one. On an automatic criteria that only ever
+    # happens for an EXCEPTION (the router refuses a manual PASS/FAIL), and
+    # clearing is_auto is what stops the next re-evaluation overwriting the
+    # waiver - without it the rule would quietly undo HR's decision.
+    row.is_auto = False
+    row.auto_reason = None
     db.add(row)
     audit_service.record(db, "CANDIDATE_STAGE_RESULT", candidate.id, AuditAction.UPDATE, user, new_value=f"{criteria.name}={result}")
     return row
@@ -495,6 +554,10 @@ def convert_to_employee(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has already been converted to an employee")
     if candidate.status != CandidateStatus.APPROVED:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Candidate must be approved before conversion to employee")
+    # Re-checked here and not only on edit: an expiry-based rule can go stale
+    # with nobody touching the candidate, and conversion is the moment that
+    # actually costs something.
+    reevaluate_auto_criteria(db, candidate, user)
     if not all_mandatory_passed(db, candidate):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has not passed (or been marked EXCEPTION for) all mandatory selection criteria yet")
     # A requalified candidate who was previously converted is a REJOINER:
@@ -593,3 +656,246 @@ def convert_to_employee(
     audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user, new_value=f"converted to episode {episode.id}")
     audit_service.record(db, "EMPLOYMENT_EPISODE", episode.id, AuditAction.CREATE, user, new_value=f"converted from candidate {candidate.reference_number}")
     return episode
+
+
+# ---------------------------------------------------------------------------
+# Bulk (shared) proof documents
+#
+# One test, one report sheet, many candidates - e.g. a training whose single
+# attendance/assessment report lists all 20 attendees. The file is uploaded
+# and stored ONCE (SharedCriteriaAttachment) and every selected candidate's
+# stage result points at it.
+#
+# This files the PROOF only. PASS/FAIL stays a per-candidate decision
+# recorded the usual way, precisely because such a report normally carries
+# both - marking twenty people PASS because one document covers them is the
+# mistake this is meant to avoid, not a shortcut it should take.
+# ---------------------------------------------------------------------------
+
+MAX_BULK_CANDIDATES = 200
+
+
+def _shared_attachment_ref_count(db: Session, shared_id: int) -> int:
+    return db.query(CandidateStageResult).filter(CandidateStageResult.shared_attachment_id == shared_id).count()
+
+
+def detach_shared_attachment(db: Session, stage_result: CandidateStageResult, actor: User, audit: bool = True) -> None:
+    """Removes the shared proof from THIS candidate only. The stored file
+    and its SharedCriteriaAttachment row survive as long as any other
+    candidate still references them, and are deleted when the last one
+    goes - a shared document is evidence for each candidate independently,
+    so one person's cleanup must never erase nineteen others'."""
+    shared_id = stage_result.shared_attachment_id
+    if not shared_id:
+        return
+    stage_result.shared_attachment_id = None
+    db.add(stage_result)
+    db.flush()
+    if _shared_attachment_ref_count(db, shared_id) == 0:
+        shared = db.query(SharedCriteriaAttachment).filter(SharedCriteriaAttachment.id == shared_id).first()
+        if shared:
+            get_storage().delete(shared.object_key)
+            db.delete(shared)
+    if audit:
+        audit_service.record(
+            db, "CANDIDATE_STAGE_RESULT", stage_result.id, AuditAction.UPDATE, actor,
+            old_value=f"shared attachment detached for criteria {stage_result.criteria_id}",
+        )
+
+
+def vet_candidate_for_bulk_attachment(db: Session, candidate: Candidate, criteria: SelectionCriteria) -> dict:
+    """Read-only verdict for one candidate, used both by the preflight
+    endpoint (so the dialog can grey out rows with the reason) and by the
+    upload itself (so the two can never disagree) - same vet-then-apply
+    shape as the employee bulk transfer's _vet_for_transfer."""
+    row = {
+        "candidate_id": candidate.id,
+        "reference_number": candidate.reference_number,
+        "name": " ".join(filter(None, [candidate.first_name, candidate.middle_name, candidate.last_name])),
+        "designation": candidate.designation.name if candidate.designation else None,
+        "blocked_reason": None,
+        "existing_result": None,
+        "existing_attachment": None,
+    }
+    if candidate.status != CandidateStatus.APPROVED:
+        row["blocked_reason"] = f"Candidate is {candidate.status} - must be Approved before a result can be recorded"
+        return row
+    required = required_criteria(db, candidate.applied_designation_id, candidate.applied_cost_center_id)
+    if criteria.id not in {r.criteria_id for r in required}:
+        row["blocked_reason"] = f"\"{criteria.name}\" is not required for this candidate's designation"
+        return row
+    existing = (
+        db.query(CandidateStageResult)
+        .filter(CandidateStageResult.candidate_id == candidate.id, CandidateStageResult.criteria_id == criteria.id)
+        .first()
+    )
+    if existing:
+        row["existing_result"] = existing.result
+        row["existing_attachment"] = _effective_attachment_name(existing)
+    return row
+
+
+def bulk_attach_shared_proof(
+    db: Session, criteria: SelectionCriteria, candidates: list[Candidate],
+    upload_file: UploadFile, actor: User,
+) -> dict:
+    """Stores the file once and points every candidate's stage result at it.
+
+    All-or-nothing on eligibility: the whole selection is vetted read-only
+    first and, if anything in it cannot take the document, nothing is
+    stored and every reason comes back in one 400 - the same rule as the
+    bulk transfer, and for the same reason (a half-filed report leaves no
+    record of which half went through)."""
+    if not criteria.supports_bulk_upload:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"\"{criteria.name}\" is not configured for bulk upload")
+    if not candidates:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Select at least one candidate")
+    if len(candidates) > MAX_BULK_CANDIDATES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"At most {MAX_BULK_CANDIDATES} candidates can be attached in one upload")
+
+    verdicts = [vet_candidate_for_bulk_attachment(db, c, criteria) for c in candidates]
+    blocked = [v for v in verdicts if v["blocked_reason"]]
+    if blocked:
+        detail = "; ".join(f"{v['reference_number'] or v['candidate_id']}: {v['blocked_reason']}" for v in blocked[:10])
+        more = f" (and {len(blocked) - 10} more)" if len(blocked) > 10 else ""
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Nothing was uploaded. {len(blocked)} of {len(candidates)} cannot take this document - {detail}{more}",
+        )
+
+    content = upload_file.file.read()
+    if not content:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The uploaded file is empty")
+    ext = os.path.splitext(upload_file.filename or "")[1]
+    stamp = dt.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    # The random segment is not decoration: two uploads of the same report in
+    # the same second would otherwise land on one object_key, and releasing
+    # the superseded SharedCriteriaAttachment would delete the file the new
+    # one is using. Each shared document owns its own stored object.
+    unique = uuid.uuid4().hex[:8]
+    stored_name = f"{stamp}-{unique}-{_slug(os.path.splitext(upload_file.filename or '')[0])}{ext}"
+    object_key = os.path.join("criteria-proofs-shared", str(criteria.id), stored_name)
+    get_storage().save(object_key, content)
+
+    shared = SharedCriteriaAttachment(
+        criteria_id=criteria.id, file_name=upload_file.filename, object_key=object_key,
+        mime_type=upload_file.content_type, file_size=len(content), uploaded_by_id=actor.id,
+    )
+    db.add(shared)
+    db.flush()
+
+    attached = []
+    for candidate in candidates:
+        row = (
+            db.query(CandidateStageResult)
+            .filter(CandidateStageResult.candidate_id == candidate.id, CandidateStageResult.criteria_id == criteria.id)
+            .first()
+        )
+        if not row:
+            row = CandidateStageResult(candidate_id=candidate.id, criteria_id=criteria.id)
+            db.add(row)
+            db.flush()
+        # Replacing whatever proof was there: an individual file of this
+        # candidate's own is removed from storage, a previously shared one
+        # is released through the reference count.
+        if row.attachment_object_key:
+            get_storage().delete(row.attachment_object_key)
+            row.attachment_object_key = None
+            row.attachment_file_name = None
+            row.attachment_mime_type = None
+        elif row.shared_attachment_id and row.shared_attachment_id != shared.id:
+            detach_shared_attachment(db, row, actor, audit=False)
+        row.shared_attachment_id = shared.id
+        db.add(row)
+        attached.append(candidate.reference_number or str(candidate.id))
+
+    audit_service.record(
+        db, "SHARED_CRITERIA_ATTACHMENT", shared.id, AuditAction.CREATE, actor,
+        new_value=f"{criteria.name}: {upload_file.filename} shared by {len(attached)} candidates",
+    )
+    return {"shared_attachment_id": shared.id, "file_name": shared.file_name, "attached": attached, "attached_count": len(attached)}
+
+
+# ---------------------------------------------------------------------------
+# Automatic criteria
+#
+# An auto criteria's result is STORED like any other (so the candidate page,
+# conversion check and audit trail all read one place), but it is owned by
+# the rule rather than by a person: it is recomputed whenever the data behind
+# it changes - the candidate is created or edited, a change request applying
+# an edit is approved, the rule itself is edited - and again at conversion,
+# because time passing is the one way a stored verdict can go stale without
+# anybody touching the candidate (a licence expires on its own).
+#
+# A human's EXCEPTION always wins. An auto FAIL is waived the same visible
+# way any other mandatory criteria is, with a remark; it is never silently
+# overwritten by a manual PASS, which would leave an overridden rule looking
+# identical to one that genuinely passed.
+# ---------------------------------------------------------------------------
+
+def reevaluate_auto_criteria(db: Session, candidate: Candidate, user: User | None = None) -> list[dict]:
+    """Recomputes every automatic criteria that applies to this candidate.
+    Safe to call as often as you like; it only writes when a verdict or its
+    reason actually changed."""
+    changed = []
+    for req in required_criteria(db, candidate.applied_designation_id, candidate.applied_cost_center_id):
+        criteria = req.criteria
+        if not criteria or not criteria_rule_service.is_auto(criteria):
+            continue
+        result, reason = criteria_rule_service.evaluate(criteria, candidate)
+        row = (
+            db.query(CandidateStageResult)
+            .filter(CandidateStageResult.candidate_id == candidate.id,
+                    CandidateStageResult.criteria_id == criteria.id)
+            .first()
+        )
+        if row and row.result == "EXCEPTION" and not row.is_auto:
+            continue                       # HR waived it; the rule does not argue
+        if not row:
+            row = CandidateStageResult(candidate_id=candidate.id, criteria_id=criteria.id)
+            db.add(row)
+        elif row.result == result and row.auto_reason == reason:
+            row.auto_evaluated_at = dt.datetime.utcnow()
+            continue
+        else:
+            changed.append({"criteria": criteria.name, "from": row.result, "to": result})
+        row.is_auto = True
+        row.result = result
+        row.auto_reason = reason
+        row.auto_evaluated_at = dt.datetime.utcnow()
+        row.tested_on = dt.date.today()
+        row.reviewed_by_id = None          # nobody decided this; the rule did
+        db.add(row)
+    if changed and user is not None:
+        audit_service.record(
+            db, "CANDIDATE", candidate.id, AuditAction.UPDATE, user,
+            new_value="; ".join(f"{c['criteria']}: {c['from']} -> {c['to']}" for c in changed),
+        )
+    db.flush()
+    return changed
+
+
+def reevaluate_candidates_for_criteria(db: Session, criteria: SelectionCriteria, user: User | None = None) -> int:
+    """After the rule itself is edited - the rule is part of "the data behind
+    the evaluation". Converted and rejected candidates are left alone: their
+    selection is over, and rewriting their record to match a rule written
+    afterwards would be rewriting history."""
+    if not criteria_rule_service.is_auto(criteria):
+        return 0
+    designation_ids = {
+        row.designation_id for row in
+        db.query(DesignationCriteria).filter(
+            DesignationCriteria.criteria_id == criteria.id, DesignationCriteria.is_active.is_(True)
+        ).all()
+    }
+    if not designation_ids:
+        return 0
+    candidates = (
+        db.query(Candidate)
+        .filter(Candidate.applied_designation_id.in_(designation_ids))
+        .filter(Candidate.status.notin_([CandidateStatus.CONVERTED, CandidateStatus.REJECTED]))
+        .all()
+    )
+    for candidate in candidates:
+        reevaluate_auto_criteria(db, candidate, user)
+    return len(candidates)

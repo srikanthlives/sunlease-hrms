@@ -291,6 +291,135 @@ employee record" link, with Requalify as the only available action.
   PENDING_APPROVAL.
 - Covered by `app/tests/test_candidate_conversion_release.py`.
 
+## Automatic (rule-decided) selection criteria
+
+A `SelectionCriteria` can be decided by a **rule over one of the candidate's
+own date fields** instead of by a person recording PASS/FAIL —
+`services/criteria_rule_service.py`. Every rule HR actually asks for turns out
+to be the same sentence: *take a date, measure the time SINCE it or UNTIL it,
+compare to a number*:
+
+| intent | field | measure | op | value | unit |
+|---|---|---|---|---|---|
+| age under 55 | `date_of_birth` | SINCE | `<` | 55 | YEARS |
+| licence 3 years old | `dl_issue_date` | SINCE | `>=` | 3 | YEARS |
+| licence not expired | `dl_expiry_date` | UNTIL | `>=` | 0 | DAYS |
+| licence good 6 more months | `dl_expiry_date` | UNTIL | `>=` | 6 | MONTHS |
+
+So it is **five dropdowns, not an expression language** — nothing to parse and
+no typo that becomes a silently wrong rule. This deliberately diverges from
+payroll's `simpleeval` formula engine, which needs arbitrary arithmetic and
+pays for it; here the whole referencable catalog is
+`criteria_rule_service.FIELDS`, served to the UI by
+`GET /recruitment/criteria-rule-options` so the two cannot drift.
+`auto_field` being set is what makes a criteria automatic; the five columns
+are validated and cleared together (`criteria_rule_service.validate`), which
+also forces `requires_attachment`/`supports_bulk_upload` off — the candidate's
+own recorded data **is** the evidence, so there is nothing to upload and
+nothing to share in bulk.
+
+- **Calendar-accurate durations, not days/365** (`_add_months`,
+  `_anniversaries_between`): someone born 1 Jan 1971 is exactly `55.0` on
+  1 Jan 2026 and `54.997` the day before, so "< 55 years" flips on the
+  birthday itself. Month-ends clamp (31 Jan + 1 month = 28 Feb), which also
+  makes a 29 Feb birthday fall on 28 Feb in a common year.
+- **Stored, not recomputed on read** — unlike the rest of this codebase's
+  lazy-on-read habit, because the user asked for stored results. The row is
+  marked `is_auto` with an `auto_reason` sentence ("Date of Birth is 56.2
+  years ago (needs less than 55 years)") and `auto_evaluated_at`.
+  `reevaluate_auto_criteria` is called wherever the data behind a verdict
+  changes: candidate create, direct-applied edit
+  (`save_or_request_candidate_update`), an approved FIELD_CHANGE change
+  request, and when the rule itself is edited
+  (`reevaluate_candidates_for_criteria`, which skips CONVERTED/REJECTED
+  candidates — their selection is over and rewriting it to match a later rule
+  would be rewriting history). It is **also re-run at conversion**, because
+  time passing is the one way a stored verdict goes stale with nobody
+  touching the candidate — a licence expires on its own, and conversion is
+  the moment that actually costs something.
+- **A blank date is PENDING**, never PASS or FAIL: a missing date is not
+  evidence the candidate met the requirement nor that they failed it. PENDING
+  already blocks conversion for a mandatory criterion, so the safe outcome
+  comes free and the reason names the field to fill in.
+- **EXCEPTION is the only human override.** A manual PASS/FAIL on an auto
+  criteria is a 400 — it would leave an overridden rule looking identical to
+  one that genuinely passed. EXCEPTION stays available (visible, with a
+  remark, as for any mandatory criteria) and `record_stage_result` clears
+  `is_auto`/`auto_reason` on the row, which is **what stops the next
+  re-evaluation quietly undoing HR's waiver**.
+- UI: `components/CriteriaRuleBuilder.jsx` on Administration > Selection
+  Criteria (create form and an edit panel under the table); the candidate
+  page shows "Automatic · <rule>" under the name, the reason under the
+  result badge, and offers only the EXCEPTION button.
+- Covered by `app/tests/test_auto_criteria_rules.py` (28 tests, the bulk of
+  them on the calendar arithmetic and the re-evaluation/override rules).
+
+## Shared (bulk) selection-criteria proof documents
+
+A `SelectionCriteria` carries two independent proof-document flags.
+**`requires_attachment`** (default **True**) is whether a proof is expected at
+all — untick it for a stage that produces no document, such as an interview or
+a reference call, and the candidate page stops warning "No proof document is
+attached" when PASS/FAIL is recorded. It is purely about *asking*: a document
+can still be attached if one turns up, and nothing is blocked either way.
+`migrate.py` adds the column as NULL on pre-existing rows, so every read is
+written `requires_attachment is not False` / `!== false` — **NULL must mean
+required**, which is how every criteria behaved before the flag existed.
+Because the bulk upload exists only to file a proof, turning this off clears
+`supports_bulk_upload` (`routers/recruitment.py::_coerce_criteria_flags`)
+rather than rejecting the combination — two checkboxes whose click order
+decided whether you got an error would be worse than one that quietly
+can't apply.
+
+The second flag: a `SelectionCriteria` can be ticked **`supports_bulk_upload`** — meaning its
+proof document covers several candidates at once (a training whose single
+report sheet lists all 20 attendees with their individual pass/fail). Only
+those criteria are offered by the bulk upload; the flag is purely about how
+the **proof** is filed and never about the result.
+
+- **`SharedCriteriaAttachment`** is the one stored copy (criteria_id, object
+  key, file name/mime/size, uploader). `CandidateStageResult` gained
+  **`shared_attachment_id`**; a row's effective proof is its own
+  `attachment_object_key` if it has one, **else** the shared file
+  (`recruitment_service.effective_attachment`). Never both — an individual
+  upload detaches the shared one first, and a bulk upload deletes a
+  superseded individual file. The download/preview routes serve whichever
+  applies, so a shared proof behaves exactly like a personal one on each
+  candidate's page (badged **Shared**).
+- **Reference-counted, not batch-owned** (`detach_shared_attachment`):
+  removing the proof from one candidate detaches only that candidate and the
+  stored file survives while anyone still points at it, going only when the
+  last reference does. A shared document is evidence for each candidate
+  independently — one person's cleanup must never erase nineteen others'.
+  The stored key carries a `uuid4` segment as well as a timestamp:
+  without it two uploads of the same report in the same second collided on
+  one key, and releasing the superseded row deleted the file the new one was
+  using (found by `test_a_second_bulk_upload_releases_the_first`).
+- **Results are deliberately not set by the upload.** Such a report normally
+  lists both passes and failures, so PASS/FAIL stays a per-candidate
+  decision recorded the usual way. Marking twenty people PASS because one
+  document covers them is the mistake this feature exists to avoid.
+- **Eligibility**: only candidates whose designation actually requires that
+  criteria (the existing `required_criteria` cascade) and who are APPROVED.
+  `GET /recruitment/bulk-criteria-preflight` gives the dialog a per-row
+  verdict so ineligible rows are greyed out **with the reason** and rows that
+  already have a result are flagged "already recorded" and start **unticked**
+  — nothing is silently overwritten. `vet_candidate_for_bulk_attachment` is
+  the single function both the preflight and the upload use, so the two can
+  never disagree (same shape as the bulk transfer's `_vet_for_transfer`).
+- All-or-nothing on eligibility and on scope: one ineligible or out-of-scope
+  candidate refuses the whole batch with every reason in one 400, rather
+  than filing a report for part of the list. `MAX_BULK_CANDIDATES = 200`.
+- Endpoints (`Permission.RECRUITMENT_MANAGE`): `GET /recruitment/bulk-criteria`,
+  `GET /recruitment/bulk-criteria-preflight`,
+  `POST /recruitment/candidates-bulk-stage-attachment` (multipart).
+  UI: a third action on the Candidates list selection bar — **Upload Test
+  Document** (`components/BulkCriteriaUploadModal.jsx`) — beside bulk
+  Transfer and bulk Document Download; the checkbox lives on Administration >
+  Selection Criteria.
+- Covered by `app/tests/test_bulk_criteria_upload.py` (22 tests, most of them
+  on the shared-file lifecycle).
+
 ## Module 2 — Attendance + Leave
 
 **Attendance**: `ShiftMaster` (master shift definitions), `RosterEntry`

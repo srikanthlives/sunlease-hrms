@@ -1373,8 +1373,61 @@ class SelectionCriteria(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(150), unique=True, nullable=False)
     description = Column(String(255))
+    # A test whose proof document covers several candidates at once - e.g. a
+    # training/assessment whose single report sheet lists all 20 attendees
+    # with their individual pass/fail. Only these criteria are offered by the
+    # bulk proof upload (see SharedCriteriaAttachment); it is purely about
+    # how the PROOF is filed, never about the result, which stays per
+    # candidate.
+    supports_bulk_upload = Column(Boolean, default=False)
+    # Some stages have no document to produce at all - an internal interview,
+    # a reference phone call. Default True (every criteria behaved that way
+    # before this flag existed); turning it off only stops the UI nagging for
+    # a proof that will never exist, it never blocks attaching one.
+    requires_attachment = Column(Boolean, default=True)
+
+    # An AUTOMATIC criteria: decided by a rule over one of the candidate's own
+    # date fields rather than by a human recording PASS/FAIL. auto_field being
+    # set is what makes a criteria automatic; the other four are meaningless
+    # without it and are cleared together (criteria_rule_service.validate).
+    # e.g. age under 55 -> date_of_birth / SINCE / < / 55 / YEARS
+    #      licence valid -> dl_expiry_date / UNTIL / >= / 0 / DAYS
+    auto_field = Column(String(50), nullable=True)      # criteria_rule_service.FIELDS
+    auto_measure = Column(String(10), nullable=True)    # SINCE / UNTIL
+    auto_operator = Column(String(5), nullable=True)    # >= > <= < ==
+    auto_value = Column(Float, nullable=True)
+    auto_unit = Column(String(10), nullable=True)       # YEARS / MONTHS / DAYS
+
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=now)
+
+
+class SharedCriteriaAttachment(Base):
+    """One physical proof document shared by several candidates' stage
+    results for the same SelectionCriteria - stored and uploaded ONCE, then
+    referenced by each CandidateStageResult.shared_attachment_id.
+
+    Deliberately reference-counted rather than owned by a "batch": removing
+    it from one candidate detaches only that candidate (the other 19 keep
+    their evidence), and the stored file is deleted only when the last
+    reference goes - see
+    recruitment_service.detach_shared_attachment. The per-row
+    attachment_object_key columns on CandidateStageResult are untouched and
+    still serve ordinary one-candidate uploads; a row's effective proof is
+    its own file if it has one, else the shared file."""
+
+    __tablename__ = "shared_criteria_attachments"
+
+    id = Column(Integer, primary_key=True)
+    criteria_id = Column(Integer, ForeignKey("selection_criteria.id"), nullable=False)
+    file_name = Column(String(255))
+    object_key = Column(String(500), nullable=False)
+    mime_type = Column(String(120))
+    file_size = Column(Integer)
+    uploaded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    criteria = relationship("SelectionCriteria")
 
 
 class DesignationCriteria(Base):
@@ -1567,11 +1620,23 @@ class CandidateStageResult(Base):
     attachment_object_key = Column(String(500), nullable=True)
     attachment_file_name = Column(String(255), nullable=True)
     attachment_mime_type = Column(String(120), nullable=True)
+    # Set instead of the three columns above when the proof is a document
+    # shared with other candidates (bulk upload). Never both.
+    shared_attachment_id = Column(Integer, ForeignKey("shared_criteria_attachments.id"), nullable=True)
+    # Set only on a row written by an automatic rule: the sentence explaining
+    # the verdict ("Date of Birth is 56.2 years ago (needs less than 55
+    # years)"), and when it was last computed. is_auto marks the row as
+    # rule-owned so a later re-evaluation knows it may overwrite it - a
+    # human's PASS/FAIL or EXCEPTION is never touched.
+    is_auto = Column(Boolean, default=False)
+    auto_reason = Column(String(500), nullable=True)
+    auto_evaluated_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
     candidate = relationship("Candidate", back_populates="stage_results")
     criteria = relationship("SelectionCriteria")
     reviewed_by = relationship("User", foreign_keys=[reviewed_by_id])
+    shared_attachment = relationship("SharedCriteriaAttachment")
 
 
 class EmployeeTransfer(Base):
