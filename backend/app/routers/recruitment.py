@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_hr_admin, require_permission
 from app.db.session import atomic_session, get_db
-from app.models.enums import AuditAction, Permission, RoleName, TransactionType
+from app.models.enums import AuditAction, CandidateStatus, Permission, RoleName, TransactionType
 from app.models.models import (
     Candidate, CandidateChangeRequest, CandidateDocument, CandidateStageResult,
-    DesignationCriteria, Project, SelectionCriteria, User,
+    DesignationCriteria, EmploymentEpisode, Project, SelectionCriteria, User,
 )
 from app.schemas.recruitment import (
     CandidateBulkTransferIn, CandidateIn, CandidateInterestIn, CandidateStageResultIn, CandidateTransferIn, ChangeRequestReviewIn,
@@ -192,6 +192,14 @@ def _candidate_detail_dict(db: Session, c: Candidate, user: User | None = None) 
         "driving_licence_requirement": licence_service.resolve_driving_licence_requirement_for_candidate(db, c),
         "source": c.source, "remarks": c.remarks,
         "converted_employee_id": c.converted_employee_id, "converted_episode_id": c.converted_episode_id,
+        # Whether that employment record still EXISTS. A draft employee can
+        # be deleted (DELETE /employees/{id}), and older deletions did not
+        # clear this pointer - so the UI must not offer a link to a record
+        # that is no longer there.
+        "converted_episode_exists": bool(
+            c.converted_episode_id
+            and db.query(EmploymentEpisode).filter(EmploymentEpisode.id == c.converted_episode_id).first()
+        ),
         "rejoin_employee_number": _rejoin_number(db, c),
         "criteria_status": recruitment_service.criteria_status(db, c),
         "all_mandatory_passed": recruitment_service.all_mandatory_passed(db, c),
@@ -351,6 +359,36 @@ def requalify_candidate(candidate_id: int, db: Session = Depends(get_db), user: 
     Converted-and-since-resigned person reapplying."""
     candidate = _get_candidate(db, candidate_id)
     recruitment_service.requalify_candidate(db, candidate, user)
+    db.commit()
+    return {"ok": True, "status": candidate.status}
+
+
+@router.post("/candidates/{candidate_id}/revert-conversion", dependencies=[Depends(require_hr_admin)])
+def revert_conversion(candidate_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Repairs a candidate left CONVERTED against an employment record that
+    no longer exists, putting them back to APPROVED so they can be
+    converted again.
+
+    This only exists for rows broken by an earlier deletion - deleting a
+    draft now releases the conversion by itself
+    (routers/employees.py::delete_draft). It therefore refuses unless the
+    pointer is genuinely dangling, so it can never be used to un-convert a
+    real employee: for that, the employment record is deleted (admin) or
+    the person is separated, and Requalify covers a rejoiner.
+    """
+    candidate = _get_candidate(db, candidate_id)
+    if candidate.status != CandidateStatus.CONVERTED:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a Converted candidate's conversion can be reverted")
+    if not candidate.converted_episode_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This candidate has no employment record recorded against it")
+    episode = db.query(EmploymentEpisode).filter(EmploymentEpisode.id == candidate.converted_episode_id).first()
+    if episode:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Employment record {episode.employee_number} still exists - delete that record instead, "
+            "or use Requalify if this person has since left and is reapplying",
+        )
+    recruitment_service.release_conversion(db, candidate, candidate.converted_employee_id, user)
     db.commit()
     return {"ok": True, "status": candidate.status}
 

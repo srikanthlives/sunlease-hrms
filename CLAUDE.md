@@ -63,7 +63,15 @@ design.
   show in their admin list (`?include_inactive=true`) with an Activate
   button. (2) a **DRAFT** employee can be hard-deleted outright
   (`DELETE /employees/{episode_id}`, 400 for any other status) — nothing
-  has been approved yet, so there's genuinely nothing to lose. Ad-hoc pay
+  has been approved yet, so there's genuinely nothing to lose — but this
+  is **HR_ADMIN/SUPER_ADMIN only** (`require_hr_admin`), NOT the
+  `employee.create` permission it used to share with HR_STAFF, and
+  deliberately a role gate rather than a grantable permission. HR_STAFF
+  abandoning a draft just leaves it as a DRAFT for an admin to clear;
+  the frontend mirrors this with a ROLE check (`Employees.jsx`'s
+  `canDeleteEmployees`, `EmployeeWizard.jsx`'s `canDelete`), not
+  `can(...)`. Covered by `app/tests/test_employee_delete_gate.py`.
+  Ad-hoc pay
   entries (`AdhocPayEntry`) and salary component overrides are also
   genuinely deletable — they're one-off, point-in-time corrections, not
   history.
@@ -220,10 +228,68 @@ a result modal. Covered by `app/tests/test_employee_bulk_transfer.py` and
 `app/tests/test_candidate_bulk_transfer.py` — the second and third test files
 in the project.
 
+**The wizard only ever discards a draft it created itself.**
+`EmployeeWizard.jsx` tracks `createdHereRef` (set when Step 1's
+`createDraftFromPersonal` actually creates the record in the "new" flow).
+Both delete paths are gated on it:
+- The footer button used to be a **"Cancel" that called
+  `DELETE /employees/{id}` for any DRAFT**, so opening an existing draft via
+  the list's Edit button and clicking Cancel hard-deleted that person. It
+  now reads **"Discard Draft"** (danger) only for a record created in this
+  session, and **"Close"** (outline) otherwise — where it just navigates
+  away, warning only that unsaved edits on the current step are lost.
+- The unmount safety net likewise required only `!isNew &&
+  !savedAnythingRef`, which would silently delete a pre-existing draft that
+  was opened and left without saving. It now needs `createdHereRef` too.
+
+**List filters are stateful** — `hooks/usePersistedState.js`, a
+localStorage-backed `useState`. Employees and Candidates persist every
+filter plus the sort and page size, so going into a record and back lands on
+the same view and keeps it until the filter is actually changed or cleared.
+Reads and writes are both guarded (private windows, blocked site data), and a
+stored value whose type no longer matches the default is ignored rather than
+fed to a filter. The page **number** is deliberately not persisted — coming
+back days later on page 7 of a different result set is disorienting, and
+`usePagination` would clamp it anyway. Keys are `hrms_<page>_f_<filter>_v1`;
+bump the `_v1` if a stored value ever changes meaning.
+
 Still deliberately deferred: Cloudflare R2 document upload (local disk
 only for now, `boto3` sits unused in requirements.txt), employee
 self-service login, Previous Employment model/UI, separation approval
 routing (not yet routed through `ApprovalRule`).
+
+**Deleting a converted candidate's employment record releases the
+conversion.** `routers/employees.py::delete_draft` reads the owning
+`Candidate` (by `converted_episode_id`) *before* the purge, then calls
+`recruitment_service.release_conversion`, which puts the candidate back to
+**APPROVED** and clears `converted_episode_id`. Without it the candidate was
+left CONVERTED pointing at an episode that no longer existed — a dead "View
+employee record" link, with Requalify as the only available action.
+- **APPROVED, not APPLIED**: the candidate had already passed every
+  mandatory criterion and been approved, so undoing the conversion returns
+  them to exactly that state, ready to convert again. Requalify
+  (→ APPLIED, full pipeline again) is for the different case of someone who
+  was employed, left, and is reapplying.
+- `converted_employee_id` is **kept when that Employee row survives** (it
+  does when the person had other stints), because `convert_to_employee`
+  reads it to reattach a rejoiner to the same person — clearing it would
+  create a duplicate person, which the Employee/Episode architecture exists
+  to prevent. It is cleared only when the Employee was purged too.
+- `GET /candidates/{id}` now returns **`converted_episode_exists`**, so the
+  UI never offers a link to a record that is gone. For candidates already
+  stranded by an older deletion there is an admin-only
+  **`POST /candidates/{id}/revert-conversion`**, surfaced as a "Revert to
+  Approved" button in the warning banner; it refuses while the episode
+  still exists, so it can never un-convert a real employee.
+- Related UI fix: the Selection Criteria card gated *viewing* on the same
+  flag as *recording* (`canRecordCriteria = isApproved`), so every
+  CONVERTED or REJECTED candidate showed "must be Approved before Selection
+  Criteria can be recorded" instead of their results — the very evidence
+  that let them be converted. Results now always render (read-only, with a
+  note saying why); only the inputs and PASS/FAIL buttons stay gated on
+  APPROVED, and the "must be Approved" message is limited to APPLIED /
+  PENDING_APPROVAL.
+- Covered by `app/tests/test_candidate_conversion_release.py`.
 
 ## Module 2 — Attendance + Leave
 

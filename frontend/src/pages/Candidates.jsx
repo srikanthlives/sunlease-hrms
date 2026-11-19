@@ -7,6 +7,7 @@ import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import ExportWizard from "../components/ExportWizard";
 import DocumentBundleModal from "../components/DocumentBundleModal";
 import { useAuth } from "../context/AuthContext";
+import usePersistedState from "../hooks/usePersistedState";
 
 const STATUS_OPTIONS = ["APPLIED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED", "WITHDRAWN"];
 
@@ -134,7 +135,7 @@ export default function Candidates() {
   // Employees defaulting to ACTIVE.
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
-  const [sort, setSort] = useState(null);
+  const [sort, setSort] = usePersistedState("hrms_candidates_sort_v1", null);
   const [docsPopup, setDocsPopup] = useState(null); // { loading, candidate, required_documents }
   const [testsPopup, setTestsPopup] = useState(null); // { loading, candidate, criteria_status }
   const [popupPreview, setPopupPreview] = useState(null); // { id, file_name, previewUrl, downloadUrl }
@@ -158,14 +159,19 @@ export default function Candidates() {
       setTestsPopup({ loading: false, candidate: null, criteria_status: [], error: apiErrorMessage(err) });
     }
   }
-  const [statusFilter, setStatusFilter] = useState("APPROVED");
-  const [interestFilter, setInterestFilter] = useState("");
-  const [costCenterFilter, setCostCenterFilter] = useState("");
-  const [projectFilter, setProjectFilter] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
-  const [search, setSearch] = useState("");
+  // Filters, sort and page size persist across navigation (localStorage via
+  // usePersistedState), so opening a candidate and coming back lands on
+  // the same filtered view until the filter is actually changed or
+  // cleared. The page NUMBER is deliberately not persisted - see the same
+  // note on the Employees list.
+  const [statusFilter, setStatusFilter] = usePersistedState("hrms_candidates_f_status_v1", "APPROVED");
+  const [interestFilter, setInterestFilter] = usePersistedState("hrms_candidates_f_interest_v1", "");
+  const [costCenterFilter, setCostCenterFilter] = usePersistedState("hrms_candidates_f_cost_center_v1", "");
+  const [projectFilter, setProjectFilter] = usePersistedState("hrms_candidates_f_project_v1", "");
+  const [categoryFilter, setCategoryFilter] = usePersistedState("hrms_candidates_f_category_v1", "");
+  const [search, setSearch] = usePersistedState("hrms_candidates_f_search_v1", "");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = usePersistedState("hrms_candidates_page_size_v1", 25);
   const [error, setError] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);

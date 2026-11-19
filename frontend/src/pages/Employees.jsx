@@ -5,6 +5,7 @@ import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Table, StatusBadge, Pagination, usePagination, sortRows, formatDate } from "../components/ui";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import { useAuth } from "../context/AuthContext";
+import usePersistedState from "../hooks/usePersistedState";
 import ExportWizard from "../components/ExportWizard";
 import DocumentBundleModal from "../components/DocumentBundleModal";
 
@@ -56,7 +57,7 @@ const STATUS_OPTIONS = ["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "SUSP
 // Always-visible actions column - appended after the user-configurable
 // ALL_COLUMNS set, never part of the visible-columns picker (mirrors
 // AttendanceRegister.jsx's summary view "_actions" column pattern).
-function makeActionsColumn(navigate, onDelete) {
+function makeActionsColumn(navigate, onDelete, canDelete) {
   return {
     key: "_actions", header: "", align: "right",
     render: (r) => (
@@ -67,7 +68,7 @@ function makeActionsColumn(navigate, onDelete) {
         >
           <Pencil size={14} />
         </Button>
-        {r.status === "DRAFT" && (
+        {canDelete && r.status === "DRAFT" && (
           <Button
             size="sm" variant="outline" className="!p-1.5" title="Delete" aria-label="Delete"
             onClick={(e) => { e.stopPropagation(); onDelete(r); }}
@@ -102,7 +103,10 @@ function uniqueValues(rows, key) {
 
 export default function Employees() {
   const navigate = useNavigate();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  // Deleting an employee is HR_ADMIN/SUPER_ADMIN only - a ROLE check,
+  // mirroring routers/employees.py::delete_draft's require_hr_admin.
+  const canDeleteEmployees = user?.role === "HR_ADMIN" || user?.role === "SUPER_ADMIN";
   const [rows, setRows] = useState([]);
   // Bulk transfer: the episode ids ticked in the list, the destination form
   // once opened, and the preflight answer that says who needs a new number.
@@ -129,18 +133,25 @@ export default function Employees() {
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkError, setBulkError] = useState("");
 
-  const [search, setSearch] = useState("");
+  // Filters, sort and page size persist across navigation (localStorage via
+  // usePersistedState) - opening an employee and coming back lands on the
+  // same filtered view instead of resetting, and it stays that way until
+  // the filter is actually changed or cleared. The page NUMBER is not
+  // persisted: coming back to the list days later on page 7 of a
+  // now-different result set is disorienting, and usePagination would
+  // silently clamp it anyway.
+  const [search, setSearch] = usePersistedState("hrms_employees_f_search_v1", "");
   // Defaults to ACTIVE - the list otherwise used to be scoped by the
   // shared Month+Cost Center global filter (a proxy for "current"
   // employees); that's gone now, so this status default does the same
   // job directly and explicitly.
-  const [statusFilter, setStatusFilter] = useState("ACTIVE");
-  const [costCenterFilter, setCostCenterFilter] = useState("");
-  const [departmentFilter, setDepartmentFilter] = useState("");
-  const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
+  const [statusFilter, setStatusFilter] = usePersistedState("hrms_employees_f_status_v1", "ACTIVE");
+  const [costCenterFilter, setCostCenterFilter] = usePersistedState("hrms_employees_f_cost_center_v1", "");
+  const [departmentFilter, setDepartmentFilter] = usePersistedState("hrms_employees_f_department_v1", "");
+  const [employmentTypeFilter, setEmploymentTypeFilter] = usePersistedState("hrms_employees_f_type_v1", "");
+  const [categoryFilter, setCategoryFilter] = usePersistedState("hrms_employees_f_category_v1", "");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = usePersistedState("hrms_employees_page_size_v1", 25);
 
   function reload() {
     setLoading(true);
@@ -259,7 +270,7 @@ export default function Employees() {
   }, [rows, search, statusFilter, costCenterFilter, departmentFilter, employmentTypeFilter, categoryFilter]);
 
   useEffect(() => setPage(1), [search, statusFilter, costCenterFilter, departmentFilter, employmentTypeFilter, categoryFilter]);
-  const [sort, setSort] = useState(null);
+  const [sort, setSort] = usePersistedState("hrms_employees_sort_v1", null);
   const sortedRows = useMemo(() => sortRows(filteredRows, ALL_COLUMNS, sort), [filteredRows, sort]);
   useEffect(() => setPage(1), [sort]);
   const { pageRows, page: safePage, pageCount, total } = usePagination(sortedRows, page, pageSize);
@@ -411,7 +422,7 @@ export default function Employees() {
           }
         : c
     )),
-    makeActionsColumn(navigate, deleteEmployee),
+    makeActionsColumn(navigate, deleteEmployee, canDeleteEmployees),
   ];
   const filtersActive = search || statusFilter || costCenterFilter || departmentFilter || employmentTypeFilter || categoryFilter;
 

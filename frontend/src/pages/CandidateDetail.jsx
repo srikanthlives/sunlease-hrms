@@ -268,6 +268,23 @@ export default function CandidateDetail() {
     }
   }
 
+  // Only offered when the conversion target is genuinely missing (the
+  // backend refuses otherwise) - repairs a candidate stranded in CONVERTED
+  // by an employment record that was deleted.
+  async function revertConversion() {
+    if (!window.confirm("Revert this conversion? The candidate goes back to Approved with their selection criteria intact, and can be converted to an employee again.")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await client.post(`/recruitment/candidates/${candidateId}/revert-conversion`);
+      reload();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function requalifyCandidate() {
     const message = candidate.status === "CONVERTED"
       ? "Requalify this candidate? Use this if they've resigned/separated and are reapplying — they'll go back to Applied and re-enter the full selection pipeline."
@@ -453,7 +470,13 @@ export default function CandidateDetail() {
   const isConverted = candidate.status === "CONVERTED";
   const isRejected = candidate.status === "REJECTED";
   const isTerminal = isConverted || isRejected;
+  // Recording a RESULT needs an Approved candidate. SEEING the recorded
+  // results is different and always allowed: for a converted candidate
+  // they are the evidence that every mandatory criterion was passed, which
+  // is exactly what someone looks back for.
   const canRecordCriteria = isApproved;
+  const criteriaNotReachedYet = isApplied || isPendingApproval;
+  const isAdmin = user?.role === "HR_ADMIN" || user?.role === "SUPER_ADMIN";
 
   return (
     <div className="space-y-6">
@@ -474,10 +497,27 @@ export default function CandidateDetail() {
       </div>
       {error && <div className="text-sm text-danger bg-danger/10 rounded-md px-3 py-2">{error}</div>}
 
-      {isConverted && (
+      {isConverted && candidate.converted_episode_exists && (
         <div className="text-sm text-brand-700 bg-brand-50 rounded-md px-3 py-2">
           Converted to employee — episode #{candidate.converted_episode_id}.{" "}
           <button className="underline" onClick={() => navigate(`/employees/${candidate.converted_episode_id}`)}>View employee record</button>
+        </div>
+      )}
+
+      {isConverted && !candidate.converted_episode_exists && (
+        <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+          <strong>The employee record this candidate was converted into (episode #{candidate.converted_episode_id}) no longer exists</strong>{" "}
+          — it was deleted while still a draft. Nothing links this candidate to an employee any more.
+          {isAdmin ? (
+            <>
+              {" "}Revert the conversion to put them back to Approved, with their selection criteria intact, so they can be converted again.
+              <div className="mt-2">
+                <Button size="sm" variant="accent" onClick={revertConversion} disabled={busy}>Revert to Approved</Button>
+              </div>
+            </>
+          ) : (
+            <> Ask an HR Admin to revert the conversion so this candidate can be converted again.</>
+          )}
         </div>
       )}
 
@@ -772,16 +812,22 @@ export default function CandidateDetail() {
 
       <Card>
         <h2 className="text-sm font-semibold text-ink mb-3">Selection Criteria</h2>
-        {!canRecordCriteria && (
+        {criteriaNotReachedYet ? (
           <p className="text-sm text-ink/40 py-4 text-center">
             This candidate must be Approved before Selection Criteria can be recorded.
           </p>
-        )}
-        {canRecordCriteria && (
+        ) : (
           <>
             <Table columns={criteriaColumns} rows={candidate.criteria_status} keyField="criteria_id" empty="No selection criteria configured for this designation." />
-            {!candidate.all_mandatory_passed && (
+            {canRecordCriteria && !candidate.all_mandatory_passed && (
               <p className="text-xs text-ink/40 mt-2">All mandatory criteria must be marked PASS or EXCEPTION before this candidate can be converted.</p>
+            )}
+            {!canRecordCriteria && (
+              <p className="text-xs text-ink/40 mt-2">
+                {isConverted
+                  ? "Read-only — these are the results recorded before this candidate was converted to an employee."
+                  : "Read-only — results can only be recorded while the candidate is Approved."}
+              </p>
             )}
           </>
         )}

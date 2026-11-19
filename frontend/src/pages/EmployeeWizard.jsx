@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import client, { apiErrorMessage } from "../api/client";
 import { Card, Button, Input, Select, Checkbox, SectionDivider, StatusBadge, formatAadhaar, formatDate } from "../components/ui";
 import OcrPreviewModal from "../components/OcrPreviewModal";
+import { useAuth } from "../context/AuthContext";
 import { Download, Trash2, Upload, ScanLine } from "lucide-react";
 
 // Only Aadhaar/PAN/Driving Licence documents support OCR extraction -
@@ -58,6 +59,13 @@ export default function EmployeeWizard() {
   // already attached, instead of an empty placeholder row existing from
   // the moment the wizard is opened.
   const isNew = episodeId === "new";
+  const { user } = useAuth();
+  // Deleting a record is HR_ADMIN/SUPER_ADMIN only - a ROLE check, not a
+  // permission one, mirroring routers/employees.py::delete_draft's
+  // require_hr_admin (deliberately not grantable to HR_STAFF through
+  // Roles & Permissions). The discard path is only offered to someone who
+  // can actually carry it out.
+  const canDelete = user?.role === "HR_ADMIN" || user?.role === "SUPER_ADMIN";
   const [step, setStep] = useState(0);
   const [error, setError] = useState("");
   const [banner, setBanner] = useState("");
@@ -99,6 +107,12 @@ export default function EmployeeWizard() {
   // without going through the explicit Cancel button - should silently
   // discard it instead of leaving an empty DRAFT-N row behind.
   const savedAnythingRef = useRef(false);
+  // True only when THIS wizard session created the employee (the "new"
+  // flow, once Step 1 saved). Opening an existing record via the list's
+  // Edit button must never discard it - "Cancel" there means "stop
+  // editing", not "delete this person" - so every delete path below is
+  // gated on this, not merely on "the record is still a DRAFT".
+  const createdHereRef = useRef(false);
   const hasCheckedInitialDataRef = useRef(false);
   const deletingRef = useRef(false);
 
@@ -232,6 +246,7 @@ export default function EmployeeWizard() {
         total_experience_years: personal.total_experience_years === "" || personal.total_experience_years == null ? null : Number(personal.total_experience_years),
       });
       savedAnythingRef.current = true;
+      createdHereRef.current = true;
       navigate(`/employees/${res.data.episode_id}/wizard`, { replace: true });
       return true;
     } catch (err) {
@@ -454,10 +469,21 @@ export default function EmployeeWizard() {
     if (ok && step < steps.length - 1) setStep(step + 1);
   }
 
+  // "Close" on a record that already existed, "Discard Draft" on one this
+  // session just created. Only the latter deletes anything.
+  const cancelDeletes = !isNew && createdHereRef.current && canDelete;
+
   async function cancelDraft() {
-    if (!window.confirm("Discard this draft? Nothing entered in this session will be saved, and this cannot be undone.")) return;
-    // Nothing has been created server-side yet while isNew - just leave.
-    if (isNew) { navigate("/employees"); return; }
+    if (!cancelDeletes) {
+      // An existing record (opened via Edit), or a user who may not
+      // delete: leaving must not touch the data. Anything already saved by
+      // a previous step stays saved - only the current step's unsaved
+      // edits are lost, which is what the confirmation says.
+      if (!window.confirm("Leave the wizard? Any changes on this step that you haven't saved will be lost. The employee record itself is kept.")) return;
+      navigate("/employees");
+      return;
+    }
+    if (!window.confirm("Discard this draft? The employee record created in this session will be deleted, and this cannot be undone.")) return;
     setCancelling(true);
     setError("");
     try {
@@ -481,7 +507,7 @@ export default function EmployeeWizard() {
   // While isNew there's nothing server-side to delete yet.
   useEffect(() => {
     return () => {
-      if (!isNew && !savedAnythingRef.current && !deletingRef.current) {
+      if (createdHereRef.current && !savedAnythingRef.current && !deletingRef.current && canDelete) {
         deletingRef.current = true;
         client.delete(`/employees/${episodeId}`).catch(() => {});
       }
@@ -1337,11 +1363,9 @@ export default function EmployeeWizard() {
           <Button variant="outline" onClick={() => goToStep(Math.max(0, step - 1))} disabled={step === 0}>
             Back
           </Button>
-          {detail.episode.status === "DRAFT" && (
-            <Button variant="danger" onClick={cancelDraft} disabled={cancelling || saving}>
-              {cancelling ? "Discarding…" : "Cancel"}
-            </Button>
-          )}
+          <Button variant={cancelDeletes ? "danger" : "outline"} onClick={cancelDraft} disabled={cancelling || saving}>
+            {cancelling ? "Discarding…" : cancelDeletes ? "Discard Draft" : "Close"}
+          </Button>
         </div>
         {step < steps.length - 1 ? (
           <Button onClick={next} disabled={saving || currentStepHasError}>{saving ? "Saving…" : "Save & Continue"}</Button>

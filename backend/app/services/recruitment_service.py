@@ -261,6 +261,47 @@ def disqualify_candidate(db: Session, candidate: Candidate, user: User) -> None:
     audit_service.record(db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user, new_value="REJECTED")
 
 
+def release_conversion(db: Session, candidate: Candidate, employee_id: int | None, user: User) -> None:
+    """The employment episode this candidate was converted into has just
+    been deleted - undo the conversion on the candidate side.
+
+    Called from routers/employees.py::delete_draft. Without this the
+    candidate stays CONVERTED pointing at an episode that no longer exists,
+    which shows up as a dead "View employee record" link and leaves
+    Requalify as the only available action.
+
+    Status goes back to **APPROVED**, not APPLIED: this candidate had
+    already passed every mandatory criterion and been approved, and
+    deleting the episode undoes only the conversion, so they return to
+    exactly the state they were in the moment before it and can simply be
+    converted again. (Requalify -> APPLIED is for the genuinely different
+    case of someone who was employed, left, and is reapplying.)
+
+    `converted_employee_id` is kept when that Employee row still exists -
+    the person survives a deleted stint if they had others - so a
+    re-conversion reattaches to the same person instead of creating a
+    duplicate, which convert_to_employee relies on. It is cleared only
+    when the Employee was purged along with the episode.
+    """
+    person_survives = (
+        employee_id is not None
+        and db.query(Employee).filter(Employee.id == employee_id).first() is not None
+    )
+    previous_status = candidate.status
+    candidate.converted_episode_id = None
+    if not person_survives:
+        candidate.converted_employee_id = None
+    if candidate.status == CandidateStatus.CONVERTED:
+        candidate.status = CandidateStatus.APPROVED
+    db.add(candidate)
+    audit_service.record(
+        db, "CANDIDATE", candidate.id, AuditAction.STATUS_CHANGE, user,
+        old_value=previous_status,
+        new_value=f"{candidate.status} (converted employment record deleted"
+                  + ("" if person_survives else "; person record deleted too") + ")",
+    )
+
+
 def requalify_candidate(db: Session, candidate: Candidate, user: User) -> None:
     """Puts a REJECTED or CONVERTED candidate back to square one (APPLIED)
     to be reconsidered through the full pipeline again - re-editable,
@@ -275,11 +316,11 @@ def requalify_candidate(db: Session, candidate: Candidate, user: User) -> None:
     employment, and the candidate's own UI only reads them while
     status == CONVERTED (see CandidateDetail.jsx's isConverted banner),
     so leaving them set here causes no confusion once status moves on.
-    Re-converting this same candidate later creates a brand new Employee
-    row (recruitment_service.convert_to_employee always does), same as
-    if the person had applied as a fresh candidate - this module doesn't
-    attempt the "same Employee, new EmploymentEpisode" rejoin pattern
-    Module 1 uses for a direct employee rehire."""
+    Re-converting this same candidate later REATTACHES to the same
+    Employee and opens a new EmploymentEpisode under it (see
+    convert_to_employee's `prior`/`converted_employee_id` branch), which
+    is why the breadcrumb matters - it is what stops a rejoiner becoming a
+    duplicate person."""
     if candidate.status not in (CandidateStatus.REJECTED, CandidateStatus.CONVERTED):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only a Rejected or Converted candidate can be requalified")
     previous_status = candidate.status

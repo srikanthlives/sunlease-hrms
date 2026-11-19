@@ -9,13 +9,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
-from app.core.deps import get_current_user, require_permission
+from app.core.deps import get_current_user, require_hr_admin, require_permission
 from app.db.session import atomic_session, get_db
 from app.models.enums import AddressType, AuditAction, EpisodeStatus, Permission, RoleName, TransactionType
 from app.models.models import (
     Employee, Address, EmploymentEpisode, StatutoryInfo, BankAccount, Dependent, Nominee,
     SeparationRecord, ChangeRequest, AuditLog, User, OrgAssignment, CostAllocation, CostCenter, Department, Project,
-    DocumentMeta, DrivingLicenceDetail, EmployeeTransfer,
+    DocumentMeta, DrivingLicenceDetail, EmployeeTransfer, Candidate,
 )
 from app.schemas.employees import (
     PersonalInfoStep, AddressStep, EmploymentInfoStep, OrgAssignmentStep, CostAllocationIn,
@@ -25,7 +25,7 @@ from app.schemas.employees import (
 from app.services import (
     audit_service, employee_service, approval_service, permission_service,
     document_service, licence_service, bulk_import_service, transfer_service, payroll_service, ocr_service,
-    employee_list_service,
+    employee_list_service, recruitment_service,
 )
 from app.services.storage import get_storage
 
@@ -115,11 +115,17 @@ def create_draft(payload: PersonalInfoStep, db: Session = Depends(get_db), user:
     return {"employee_id": employee.id, "episode_id": episode.id}
 
 
-@router.delete("/{episode_id}", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
+@router.delete("/{episode_id}", dependencies=[Depends(require_hr_admin)])
 def delete_draft(episode_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Hard-deletes a DRAFT employee started by mistake - nothing has been
     approved yet so there's genuinely nothing to lose (unlike master data,
     which is deactivated, never deleted). 400 for any non-DRAFT episode.
+
+    **HR_ADMIN/SUPER_ADMIN only** (`require_hr_admin`, not the
+    `employee.create` permission it used to share with HR_STAFF). Deleting
+    a person's record is irreversible and leaves nothing behind to review,
+    so it is not part of day-to-day data entry - HR_STAFF abandoning a
+    draft simply leaves it as a DRAFT for an admin to clear.
     Cascades through every episode-scoped child table a draft could
     plausibly have populated, then the episode, then the parent Employee
     row (+ its Address rows) only if this was that Employee's only episode."""
@@ -129,10 +135,22 @@ def delete_draft(episode_id: int, db: Session = Depends(get_db), user: User = De
 
     audit_service.record(db, "EMPLOYEE_DRAFT", episode.id, AuditAction.UPDATE, user, old_value=f"deleted employee_number={episode.employee_number}")
 
+    # A draft that came from recruitment is pointed at by its Candidate
+    # (converted_episode_id). Both are read BEFORE the purge, since the
+    # episode row - and possibly the Employee row - is gone after it.
+    candidate = db.query(Candidate).filter(Candidate.converted_episode_id == episode.id).first()
+    employee_id = episode.employee_id
+
     employee_service.purge_draft_episode(db, episode)
 
+    # Undo the conversion on the candidate side too, or it is left CONVERTED
+    # pointing at an episode that no longer exists - a dead "View employee
+    # record" link, with Requalify as its only way out.
+    if candidate:
+        recruitment_service.release_conversion(db, candidate, employee_id, user)
+
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "candidate_reverted": candidate.reference_number if candidate else None}
 
 
 @router.get("-bulk-upload-template", dependencies=[Depends(require_permission(Permission.EMPLOYEE_CREATE))])
