@@ -166,6 +166,46 @@ def update_designation_criteria(row_id: int, payload: DesignationCriteriaUpdateI
     return _designation_criteria_dict(r)
 
 
+def _another_row_still_covers(db: Session, row: DesignationCriteria, tested: list[Candidate]) -> bool:
+    """Whether some OTHER active requirement still makes this criteria apply
+    to every candidate who has already been tested against it.
+
+    The results guard above exists because a CandidateStageResult is keyed by
+    candidate_id + criteria_id and carries no link back to the requirement
+    row that caused it, so deleting the last row that asks for a criteria
+    would leave recorded results in the database but invisible - present, not
+    gone, and surprising for HR.
+
+    None of that applies while another row still covers those candidates: the
+    criteria stays in their list and their results stay on screen. The common
+    case is exactly that - a global requirement plus a Cost-Center-scoped one
+    overriding its terms, where removing the scoped row changes nothing about
+    whether the criteria applies. Without this the row could never be deleted,
+    because the global rule's own results counted against it; for an automatic
+    criteria, which writes a result for every candidate as soon as they are
+    created, it could never be deleted at all.
+    """
+    siblings = (
+        db.query(DesignationCriteria)
+        .filter(DesignationCriteria.designation_id == row.designation_id,
+                DesignationCriteria.criteria_id == row.criteria_id,
+                DesignationCriteria.id != row.id,
+                DesignationCriteria.is_active.is_(True))
+        .all()
+    )
+    if not siblings:
+        return False
+    # required_criteria matches a row when it is global or names the
+    # candidate's own Cost Center, so coverage is decided per candidate -
+    # removing a global row is only safe if EVERY tested candidate's Cost
+    # Center has its own active row. Partial coverage is not coverage.
+    scoped_cost_centers = {s.cost_center_id for s in siblings if s.cost_center_id is not None}
+    has_global = any(s.cost_center_id is None for s in siblings)
+    if has_global:
+        return True
+    return all(c.applied_cost_center_id in scoped_cost_centers for c in tested)
+
+
 @router.delete("/designation-criteria/{row_id}", dependencies=[Depends(require_hr_admin)])
 def delete_designation_criteria(row_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Hard-deletes only if no candidate in this row's scope has ever
@@ -183,12 +223,18 @@ def delete_designation_criteria(row_id: int, db: Session = Depends(get_db), user
     candidates_query = db.query(Candidate).filter(Candidate.applied_designation_id == r.designation_id)
     if r.cost_center_id is not None:
         candidates_query = candidates_query.filter(Candidate.applied_cost_center_id == r.cost_center_id)
-    candidate_ids = [c.id for c in candidates_query.all()]
-    has_results = bool(candidate_ids) and db.query(CandidateStageResult).filter(
-        CandidateStageResult.criteria_id == r.criteria_id,
-        CandidateStageResult.candidate_id.in_(candidate_ids),
-    ).first()
-    if has_results:
+    candidates = candidates_query.all()
+    tested = []
+    if candidates:
+        tested_ids = {
+            row.candidate_id for row in
+            db.query(CandidateStageResult).filter(
+                CandidateStageResult.criteria_id == r.criteria_id,
+                CandidateStageResult.candidate_id.in_([c.id for c in candidates]),
+            ).all()
+        }
+        tested = [c for c in candidates if c.id in tested_ids]
+    if tested and not _another_row_still_covers(db, r, tested):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "This requirement already has recorded candidate test results - deactivate it instead of removing it.",

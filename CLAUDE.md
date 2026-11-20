@@ -291,6 +291,37 @@ employee record" link, with Requalify as the only available action.
   PENDING_APPROVAL.
 - Covered by `app/tests/test_candidate_conversion_release.py`.
 
+## Deleting a Designation Criteria requirement
+
+`routers/recruitment.py::delete_designation_criteria` refuses a hard delete
+once candidates in the row's scope have recorded results, because a
+`CandidateStageResult` is keyed by `candidate_id + criteria_id` and carries
+**no FK back to the requirement row that produced it** — deleting the last row
+asking for a criteria would leave those results in the database but invisible
+(present, not gone, and surprising for HR). Deactivate is the documented
+alternative.
+
+That guard used to fire even when **another active row still covered the same
+candidates**, which made the ordinary "global rule plus a Cost-Center-scoped
+override" pair impossible to tidy up: the global rule's own results counted
+against the scoped row. `_another_row_still_covers` now lets the delete
+through when every already-tested candidate stays covered, since the criteria
+remains in their list and their results stay on screen — nothing is stranded.
+
+- Coverage is decided **per candidate**, mirroring `required_criteria`'s own
+  matching: an active global sibling covers everyone, while scoped siblings
+  only cover their own Cost Centers. So removing a *global* row is allowed
+  only if **every** tested candidate's Cost Center has its own active row —
+  partial coverage is not coverage.
+- An **inactive** sibling is not coverage, because `required_criteria` filters
+  `is_active` before resolving specificity. (That same ordering is why
+  deactivating a scoped row makes the global one win, which is usually the
+  behaviour HR actually wanted.)
+- This mattered most for an **automatic** criteria, which writes a result for
+  every candidate the moment they are created — such a row could previously
+  never be deleted at all.
+- Covered by `app/tests/test_designation_criteria_delete.py` (8 tests).
+
 ## Automatic (rule-decided) selection criteria
 
 A `SelectionCriteria` can be decided by a **rule over one of the candidate's
